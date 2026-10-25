@@ -53,7 +53,11 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<User | null>;
   signOutUser: () => Promise<void>;
   registerForClass: (className: string, preferredDate?: string, notes?: string) => Promise<void>;
-  submitInquiry: (subject: string, message: string) => Promise<void>;
+  submitInquiry: (
+    subject: string,
+    message: string,
+    contactInfo?: { name?: string; email?: string; phone?: string }
+  ) => Promise<void>;
   toggleFavorite: (brownieId: string) => Promise<void>;
   userRegistrations: ClassRegistration[];
   userInquiries: Inquiry[];
@@ -76,17 +80,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Sync user profile in Firestore
         const userDocRef = doc(db, 'users', currentUser.uid);
         try {
+          const emailLower = (currentUser.email || '').toLowerCase().trim();
+          let isAuthorizedAdmin = ['vigneshsivan2001@gmail.com', 'preethipreethu712@gmail.com'].includes(emailLower);
+
+          if (!isAuthorizedAdmin && emailLower) {
+            try {
+              const adminSnap = await getDoc(doc(db, 'settings', 'admins'));
+              if (adminSnap.exists()) {
+                const adminData = adminSnap.data();
+                const emails: string[] = Array.isArray(adminData?.adminEmails)
+                  ? adminData.adminEmails.map((e: string) => e.toLowerCase())
+                  : [];
+                if (emails.includes(emailLower)) {
+                  isAuthorizedAdmin = true;
+                }
+              }
+            } catch {}
+          }
+
           const docSnap = await getDoc(userDocRef);
           if (docSnap.exists()) {
-            setUserProfile(docSnap.data() as UserProfile);
+            const existingProfile = docSnap.data() as UserProfile;
+            if (isAuthorizedAdmin && existingProfile.role !== 'admin') {
+              const upgradedProfile: UserProfile = { ...existingProfile, role: 'admin' };
+              await setDoc(userDocRef, { role: 'admin' }, { merge: true });
+              setUserProfile(upgradedProfile);
+            } else {
+              setUserProfile(existingProfile);
+            }
           } else {
-            const isAdmin = currentUser.email === 'vigneshsivan2001@gmail.com';
             const newProfile: UserProfile = {
               uid: currentUser.uid,
               displayName: currentUser.displayName || 'Baking Enthusiast',
               email: currentUser.email || '',
               photoURL: currentUser.photoURL || '',
-              role: isAdmin ? 'admin' : 'customer',
+              role: isAuthorizedAdmin ? 'admin' : 'customer',
               createdAt: new Date().toISOString(),
               favorites: ['classic-fudge', 'salted-caramel'],
             };
@@ -133,10 +161,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, [user]);
 
-  // Listen to user inquiries when user is logged in
+  // Listen to user inquiries when user is logged in, or load from localStorage if guest
   useEffect(() => {
     if (!user) {
-      setUserInquiries([]);
+      try {
+        const stored = localStorage.getItem('browinegirl_customer_inquiries');
+        if (stored) {
+          setUserInquiries(JSON.parse(stored));
+        } else {
+          setUserInquiries([]);
+        }
+      } catch {
+        setUserInquiries([]);
+      }
       return;
     }
 
@@ -152,7 +189,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUserInquiries(inqs);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.GET, inqColPath);
+        console.warn('Inquiries listener fallback:', error);
       }
     );
 
@@ -207,24 +244,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const submitInquiry = async (subject: string, message: string) => {
-    if (!user) {
-      throw new Error('Please sign in with Google to submit an inquiry.');
-    }
+  const submitInquiry = async (
+    subject: string,
+    message: string,
+    contactInfo?: { name?: string; email?: string; phone?: string }
+  ) => {
     const path = 'inquiries';
+    const guestId = `guest_${Date.now()}`;
+    const inquiryData = {
+      userId: user?.uid || guestId,
+      userEmail: contactInfo?.email || user?.email || 'guest@browinegirlcakes.com',
+      userName: contactInfo?.name || user?.displayName || 'Bakery Guest',
+      userPhone: contactInfo?.phone || '',
+      subject,
+      message,
+      status: 'new' as const,
+      createdAt: new Date().toISOString(),
+    };
+
     try {
-      await addDoc(collection(db, path), {
-        userId: user.uid,
-        userEmail: user.email || '',
-        userName: user.displayName || 'Bakery Guest',
-        subject,
-        message,
-        status: 'new',
-        createdAt: new Date().toISOString(),
-      });
+      await addDoc(collection(db, path), inquiryData);
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, path);
+      console.warn('Could not save inquiry to Firestore directly, cached locally:', error);
     }
+
+    try {
+      const stored = localStorage.getItem('browinegirl_customer_inquiries');
+      const list = stored ? JSON.parse(stored) : [];
+      list.unshift({ id: guestId, ...inquiryData });
+      localStorage.setItem('browinegirl_customer_inquiries', JSON.stringify(list));
+      setUserInquiries((prev) => [{ id: guestId, ...inquiryData }, ...prev]);
+    } catch {}
   };
 
   const toggleFavorite = async (brownieId: string) => {

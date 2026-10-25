@@ -1,7 +1,7 @@
 import React from 'react';
-import { Heart, Sparkles, Award, ChefHat, Flame, Coffee, Phone } from 'lucide-react';
-
+import { Heart, Sparkles, Award, ChefHat, Flame, Coffee, Phone, Instagram } from 'lucide-react';
 import { useContent } from '../context/ContentContext';
+import { getInstagramUrl } from '../utils/formatters';
 
 interface AboutSectionProps {
   onJoinClass: () => void;
@@ -12,7 +12,7 @@ export const AboutSection: React.FC<AboutSectionProps> = ({
   onJoinClass,
   onExploreCreations,
 }) => {
-  const { settings } = useContent();
+  const { settings, bakingClasses } = useContent();
 
   return (
     <section id="about-section" className="py-20 bg-[#F8F0E5] relative overflow-hidden">
@@ -28,7 +28,7 @@ export const AboutSection: React.FC<AboutSectionProps> = ({
               />
               <div className="absolute inset-0 bg-gradient-to-t from-[#1A0B08]/80 via-transparent to-transparent" />
               <div className="absolute bottom-6 left-6 right-6 p-4 rounded-2xl bg-[#3B211B]/90 backdrop-blur-md border border-[#C47B55]/40 text-[#F8F0E5]">
-                <p className="font-serif italic text-base sm:text-lg">
+                <p className="font-editorial italic text-base sm:text-lg">
                   "Every batch starts with genuine respect for single-origin cocoa and honest, slow baking."
                 </p>
                 <p className="text-xs font-semibold text-[#E5A962] mt-2">
@@ -56,7 +56,7 @@ export const AboutSection: React.FC<AboutSectionProps> = ({
               The Baker Behind the Brand
             </div>
 
-            <h2 className="font-serif text-3xl sm:text-4xl lg:text-5xl font-bold text-[#3B211B] leading-tight">
+            <h2 className="font-story text-3xl sm:text-4xl lg:text-5xl font-bold text-[#3B211B] leading-tight">
               Baked with Passion. Perfected with Love.
             </h2>
 
@@ -72,24 +72,24 @@ export const AboutSection: React.FC<AboutSectionProps> = ({
             <div className="grid grid-cols-2 gap-4 pt-2">
               <div className="p-4 rounded-2xl bg-white border border-[#E8D6C3]">
                 <Flame className="w-5 h-5 text-[#C47B55] mb-2" />
-                <h4 className="font-serif font-bold text-[#3B211B] text-sm">Fudgy Perfection</h4>
+                <h4 className="font-editorial font-bold text-[#3B211B] text-base">Fudgy Perfection</h4>
                 <p className="text-xs text-[#3B211B]/70 mt-1">Precise bake timing for deep chocolate decadence.</p>
               </div>
 
               <div className="p-4 rounded-2xl bg-white border border-[#E8D6C3]">
                 <Sparkles className="w-5 h-5 text-[#C47B55] mb-2" />
-                <h4 className="font-serif font-bold text-[#3B211B] text-sm">Hands-On Studio</h4>
+                <h4 className="font-editorial font-bold text-[#3B211B] text-base">Hands-On Studio</h4>
                 <p className="text-xs text-[#3B211B]/70 mt-1">Beginner-friendly brownie masterclasses.</p>
               </div>
             </div>
 
-            {/* CTAs & Phone Hotline */}
-            <div className="flex flex-wrap items-center gap-4 pt-2">
+            {/* CTAs & Instagram Link */}
+            <div className="flex flex-wrap items-center gap-3 pt-2">
               <button
                 onClick={onJoinClass}
                 className="px-6 py-3 rounded-full bg-[#3B211B] hover:bg-[#23120E] text-[#F8F0E5] font-semibold text-sm tracking-wide shadow-md transition-all cursor-pointer"
               >
-                Join a Baking Class
+                {bakingClasses && bakingClasses.length > 0 ? 'Join a Baking Class' : 'Studio Classes & Waitlist'}
               </button>
               <button
                 onClick={onExploreCreations}
@@ -97,6 +97,16 @@ export const AboutSection: React.FC<AboutSectionProps> = ({
               >
                 Browse Flavors
               </button>
+              <a
+                href={getInstagramUrl(settings.instagramId)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-5 py-3 rounded-full bg-white hover:bg-stone-50 text-[#3B211B] border border-[#E8D6C3] font-semibold text-sm tracking-wide shadow-xs hover:border-[#C47B55] transition-all flex items-center gap-2 cursor-pointer"
+                title="Follow our baking journey on Instagram"
+              >
+                <Instagram className="w-4 h-4 text-[#E5A962]" />
+                <span>@browniegirlcakes</span>
+              </a>
             </div>
 
             <div className="pt-2 flex items-center gap-3 text-xs text-[#3B211B]/80">

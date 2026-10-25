@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useContent } from '../context/ContentContext';
 import {
-  User as UserIcon,
   LogOut,
   Heart,
   CalendarCheck,
@@ -11,12 +10,17 @@ import {
   ChevronDown,
   Cake,
   Phone,
+  Truck,
+  Instagram,
+  MessageCircle,
 } from 'lucide-react';
+import { getInstagramUrl } from '../utils/formatters';
 
 interface NavbarProps {
   onOpenCreations: () => void;
   onOpenClasses: () => void;
   onOpenContact: () => void;
+  onOpenCustomOrders?: () => void;
   onOpenMyActivity?: () => void;
 }
 
@@ -24,25 +28,54 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenCreations,
   onOpenClasses,
   onOpenContact,
+  onOpenCustomOrders,
   onOpenMyActivity,
 }) => {
   const { user, userProfile, signInWithGoogle, signOutUser, userRegistrations } = useAuth();
-  const { settings } = useContent();
+  const { settings, bakingClasses, adminEmails } = useContent();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const isAdmin =
+    userProfile?.role === 'admin' ||
+    user?.email?.toLowerCase() === 'vigneshsivan2001@gmail.com' ||
+    user?.email?.toLowerCase() === 'preethipreethu712@gmail.com' ||
+    (user?.email && adminEmails.some((e) => e.toLowerCase() === user.email?.toLowerCase()));
 
   return (
     <>
       {/* Top Announcement Bar */}
-      <div className="bg-[#23120E] text-[#E8D6C3] text-xs py-2 px-4 border-b border-[#3B211B]/50">
+      <div className="bg-[#23120E] text-[#E8D6C3] text-[11px] sm:text-xs py-1.5 sm:py-2 px-3 sm:px-4 border-b border-[#3B211B]/50">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2 mx-auto sm:mx-0">
-            <span className="inline-block w-2 h-2 rounded-full bg-[#C47B55] animate-pulse"></span>
-            <span className="font-medium tracking-wide">
-              Fresh handcrafted brownie batches baked daily &bull; Next baking masterclass starts Nov 2nd
+            <span className="inline-block w-2 h-2 rounded-full bg-[#C47B55] animate-pulse shrink-0"></span>
+            <span className="font-medium tracking-wide truncate">
+              Fresh handcrafted brownie batches baked daily
             </span>
           </div>
           <div className="hidden sm:flex items-center gap-5 text-[11px] text-[#E8D6C3]/80">
+            <a
+              href={getInstagramUrl(settings.instagramId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 hover:text-[#E5A962] text-[#E8D6C3] transition-colors"
+              title="Official Instagram @browniegirlcakes"
+            >
+              <Instagram className="w-3.5 h-3.5 text-[#E5A962]" />
+              <span className="font-medium">@browniegirlcakes</span>
+            </a>
+            <span className="text-[#C47B55]">•</span>
+            <a
+              href={`https://wa.me/91${(settings.whatsappNumber || '7339651529').replace(/[^0-9]/g, '')}?text=${encodeURIComponent('Hello BrowineGirlCakes! I would like to inquire about a custom order.')}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 hover:text-[#25D366] text-[#E8D6C3] transition-colors font-medium"
+              title="Chat with Baker on WhatsApp"
+            >
+              <MessageCircle className="w-3.5 h-3.5 text-[#25D366]" />
+              <span>WhatsApp: {settings.whatsappNumber || '7339651529'}</span>
+            </a>
+            <span className="text-[#C47B55]">•</span>
             <a
               href={`tel:${settings.phoneRaw || '+15553922253'}`}
               className="flex items-center gap-1.5 hover:text-[#E5A962] transition-colors"
@@ -57,21 +90,21 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       {/* Main Header */}
       <header className="sticky top-0 z-40 bg-[#F8F0E5]/95 backdrop-blur-md border-b border-[#E8D6C3]/60 transition-all shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 sm:h-20 flex items-center justify-between gap-2">
           {/* Logo & Brand */}
           <a
             href="#"
-            className="flex items-center gap-3 group focus:outline-none focus:ring-2 focus:ring-[#C47B55] rounded-lg p-1"
+            className="flex items-center gap-2 sm:gap-3 group focus:outline-none focus:ring-2 focus:ring-[#C47B55] rounded-lg p-1 min-w-0"
             aria-label="BrowineGirlCakes Home"
           >
-            <div className="w-11 h-11 rounded-full bg-[#3B211B] flex items-center justify-center text-[#F8F0E5] shadow-md group-hover:bg-[#C47B55] transition-colors duration-300">
-              <Cake className="w-6 h-6 text-[#E8D6C3] group-hover:scale-110 transition-transform" />
+            <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-[#3B211B] flex items-center justify-center text-[#F8F0E5] shadow-md group-hover:bg-[#C47B55] transition-colors duration-300 shrink-0">
+              <Cake className="w-5 h-5 sm:w-6 sm:h-6 text-[#E8D6C3] group-hover:scale-110 transition-transform" />
             </div>
-            <div className="flex flex-col">
-              <span className="font-serif text-2xl font-bold tracking-tight text-[#3B211B] leading-none group-hover:text-[#C47B55] transition-colors">
+            <div className="flex flex-col min-w-0">
+              <span className="font-brand text-[15px] sm:text-2xl font-bold tracking-normal sm:tracking-wider text-[#3B211B] leading-none group-hover:text-[#C47B55] transition-colors whitespace-nowrap">
                 BrowineGirlCakes
               </span>
-              <span className="text-[10px] uppercase tracking-[0.25em] text-[#C47B55] font-semibold mt-1">
+              <span className="text-[8.5px] sm:text-[10px] uppercase tracking-[0.14em] sm:tracking-[0.25em] text-[#C47B55] font-semibold mt-0.5 sm:mt-1 whitespace-nowrap">
                 Artisan Brownies & Studio
               </span>
             </div>
@@ -87,9 +120,14 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
             <button
               onClick={onOpenClasses}
-              className="text-[#3B211B]/85 hover:text-[#C47B55] font-medium text-sm tracking-wide transition-colors cursor-pointer py-1 border-b-2 border-transparent hover:border-[#C47B55]"
+              className="text-[#3B211B]/85 hover:text-[#C47B55] font-medium text-sm tracking-wide transition-colors cursor-pointer py-1 border-b-2 border-transparent hover:border-[#C47B55] flex items-center gap-1.5"
             >
-              Baking Classes
+              <span>Baking Classes</span>
+              {bakingClasses && bakingClasses.length === 0 && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-[#E8D6C3] text-[#3B211B]/70 font-semibold">
+                  Waitlist
+                </span>
+              )}
             </button>
             <a
               href="#about-section"
@@ -98,20 +136,20 @@ export const Navbar: React.FC<NavbarProps> = ({
               Our Story
             </a>
             <button
-              onClick={onOpenContact}
-              className="text-[#3B211B]/85 hover:text-[#C47B55] font-medium text-sm tracking-wide transition-colors cursor-pointer py-1 border-b-2 border-transparent hover:border-[#C47B55]"
+              onClick={onOpenCustomOrders || onOpenContact}
+              className="px-4 py-2 rounded-full bg-[#C47B55] hover:bg-[#D98B5F] text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
             >
               Custom Orders
             </button>
           </nav>
 
           {/* User Account / Auth Actions */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             {user ? (
               <div className="relative">
                 <button
                   onClick={() => setDropdownOpen(!dropdownOpen)}
-                  className="flex items-center gap-2 p-1.5 pl-3 pr-2.5 rounded-full bg-[#E8D6C3]/50 hover:bg-[#E8D6C3] border border-[#C47B55]/30 text-[#3B211B] transition-all cursor-pointer shadow-xs"
+                  className="flex items-center gap-1.5 sm:gap-2 p-1.5 sm:pl-3 sm:pr-2.5 rounded-full bg-[#E8D6C3]/50 hover:bg-[#E8D6C3] border border-[#C47B55]/30 text-[#3B211B] transition-all cursor-pointer shadow-xs min-h-[40px]"
                   aria-expanded={dropdownOpen}
                 >
                   {user.photoURL ? (
@@ -145,7 +183,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <div className="px-4 py-3 border-b border-[#E8D6C3]">
                       <p className="text-xs text-[#3B211B]/60">Signed in as</p>
                       <p className="text-sm font-semibold text-[#3B211B] truncate">{user.email}</p>
-                      {(userProfile?.role === 'admin' || user.email === 'vigneshsivan2001@gmail.com') && (
+                      {isAdmin && (
                         <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-[#E8D6C3]/50">
                           <span className="inline-block px-2 py-0.5 text-[10px] bg-[#3B211B] text-[#E8D6C3] rounded-md font-semibold uppercase tracking-wider">
                             Owner / Admin
@@ -160,6 +198,20 @@ export const Navbar: React.FC<NavbarProps> = ({
                         </div>
                       )}
                     </div>
+
+                    <button
+                      onClick={() => {
+                        setDropdownOpen(false);
+                        onOpenMyActivity?.();
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-xs text-[#3B211B] hover:bg-[#E8D6C3]/60 flex items-center justify-between transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Truck className="w-4 h-4 text-[#C47B55]" />
+                        Track Brownie Delivery
+                      </span>
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    </button>
 
                     <button
                       onClick={() => {
@@ -211,9 +263,9 @@ export const Navbar: React.FC<NavbarProps> = ({
             ) : (
               <button
                 onClick={signInWithGoogle}
-                className="flex items-center gap-2 bg-[#3B211B] hover:bg-[#23120E] text-[#F8F0E5] px-4 py-2 rounded-full text-xs font-semibold tracking-wide shadow-sm hover:shadow-md transition-all duration-200 cursor-pointer border border-[#3B211B]"
+                className="flex items-center gap-1.5 sm:gap-2 bg-[#3B211B] hover:bg-[#23120E] text-[#F8F0E5] px-3 sm:px-4 py-2 rounded-full text-xs font-semibold tracking-wide shadow-sm hover:shadow-md transition-all duration-200 cursor-pointer border border-[#3B211B] min-h-[38px]"
               >
-                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
+                <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24">
                   <path
                     fill="currentColor"
                     d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -238,7 +290,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Mobile Hamburger Button */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="md:hidden p-2 rounded-lg text-[#3B211B] hover:bg-[#E8D6C3] focus:outline-none"
+              className="md:hidden w-10 h-10 flex items-center justify-center rounded-xl text-[#3B211B] hover:bg-[#E8D6C3] focus:outline-none cursor-pointer"
               aria-label="Toggle navigation menu"
             >
               {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
@@ -248,13 +300,13 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Mobile Navigation Drawer */}
         {mobileMenuOpen && (
-          <div className="md:hidden bg-[#F8F0E5] border-t border-[#E8D6C3] px-5 py-4 space-y-3 shadow-lg animate-in slide-in-from-top-4">
+          <div className="md:hidden bg-[#F8F0E5] border-t border-[#E8D6C3] px-4 py-4 space-y-2 shadow-xl animate-in slide-in-from-top-4">
             <button
               onClick={() => {
                 setMobileMenuOpen(false);
                 onOpenCreations();
               }}
-              className="block w-full text-left py-2 font-medium text-[#3B211B] hover:text-[#C47B55]"
+              className="block w-full text-left py-2.5 px-3 rounded-xl font-medium text-[#3B211B] hover:bg-[#E8D6C3]/60"
             >
               Our Brownies
             </button>
@@ -263,39 +315,99 @@ export const Navbar: React.FC<NavbarProps> = ({
                 setMobileMenuOpen(false);
                 onOpenClasses();
               }}
-              className="block w-full text-left py-2 font-medium text-[#3B211B] hover:text-[#C47B55]"
+              className="w-full text-left py-2.5 px-3 rounded-xl font-medium text-[#3B211B] hover:bg-[#E8D6C3]/60 flex items-center justify-between"
             >
-              Baking Classes
+              <span>Baking Classes</span>
+              {bakingClasses && bakingClasses.length === 0 && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#E8D6C3] text-[#3B211B]/70 font-semibold">
+                  Waitlist
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => {
+                setMobileMenuOpen(false);
+                onOpenMyActivity?.();
+              }}
+              className="w-full text-left py-2.5 px-3 rounded-xl font-medium text-[#3B211B] hover:bg-[#E8D6C3]/60 flex items-center justify-between"
+            >
+              <span>Track Orders & My Bookings</span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             </button>
             <a
               href="#about-section"
               onClick={() => setMobileMenuOpen(false)}
-              className="block py-2 font-medium text-[#3B211B] hover:text-[#C47B55]"
+              className="block py-2.5 px-3 rounded-xl font-medium text-[#3B211B] hover:bg-[#E8D6C3]/60"
             >
               Our Story
             </a>
             <button
               onClick={() => {
                 setMobileMenuOpen(false);
-                onOpenContact();
+                if (onOpenCustomOrders) onOpenCustomOrders();
+                else onOpenContact();
               }}
-              className="block w-full text-left py-2 font-medium text-[#3B211B] hover:text-[#C47B55]"
+              className="block w-full text-left py-2.5 px-3 rounded-xl font-bold text-[#C47B55] hover:bg-[#E8D6C3]/60"
             >
-              Custom Orders
+              Custom Orders & Catering
             </button>
 
-            <div className="pt-2 border-t border-[#E8D6C3]">
+            <div className="pt-2 border-t border-[#E8D6C3] grid grid-cols-2 gap-2">
               <a
                 href={`tel:${settings.phoneRaw || '+15553922253'}`}
-                className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl bg-[#3B211B] text-[#F8F0E5] text-xs font-semibold shadow-xs"
+                className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-[#3B211B] text-[#F8F0E5] text-xs font-semibold shadow-xs"
               >
                 <Phone className="w-3.5 h-3.5 text-[#C47B55]" />
-                <span>Call Bakery: {settings.phone}</span>
+                <span>Call Bakery</span>
+              </a>
+              <a
+                href={`https://wa.me/91${(settings.whatsappNumber || '7339651529').replace(/[^0-9]/g, '')}?text=${encodeURIComponent('Hello BrowineGirlCakes! I would like to inquire about an order.')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-[#25D366] text-white text-xs font-semibold shadow-xs"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                <span>WhatsApp</span>
               </a>
             </div>
           </div>
         )}
       </header>
+
+      {/* Fixed Mobile Bottom Thumb-Zone Navigation Bar */}
+      <nav
+        aria-label="Mobile quick navigation"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#23120E]/95 backdrop-blur-md border-t border-[#C47B55]/30 px-2 py-1.5 flex items-center justify-around shadow-2xl"
+      >
+        <button
+          onClick={onOpenCreations}
+          className="flex flex-col items-center justify-center py-1 px-2 text-[#E8D6C3] hover:text-[#E5A962] active:scale-95 transition-all cursor-pointer min-w-[58px]"
+        >
+          <Cake className="w-4 h-4 text-[#C47B55] mb-0.5" />
+          <span className="text-[10px] font-semibold">Brownies</span>
+        </button>
+        <button
+          onClick={onOpenClasses}
+          className="flex flex-col items-center justify-center py-1 px-2 text-[#E8D6C3] hover:text-[#E5A962] active:scale-95 transition-all cursor-pointer min-w-[58px]"
+        >
+          <CalendarCheck className="w-4 h-4 text-[#C47B55] mb-0.5" />
+          <span className="text-[10px] font-semibold">Classes</span>
+        </button>
+        <button
+          onClick={onOpenCustomOrders || onOpenContact}
+          className="flex flex-col items-center justify-center py-1.5 px-3 rounded-xl bg-[#C47B55] text-white shadow-sm active:scale-95 transition-all cursor-pointer"
+        >
+          <Heart className="w-4 h-4 mb-0.5" />
+          <span className="text-[10px] font-bold">Custom</span>
+        </button>
+        <button
+          onClick={() => onOpenMyActivity?.()}
+          className="flex flex-col items-center justify-center py-1 px-2 text-[#E8D6C3] hover:text-[#E5A962] active:scale-95 transition-all cursor-pointer min-w-[58px]"
+        >
+          <Truck className="w-4 h-4 text-[#C47B55] mb-0.5" />
+          <span className="text-[10px] font-semibold">Orders</span>
+        </button>
+      </nav>
     </>
   );
 };

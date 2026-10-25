@@ -4,10 +4,11 @@ import {
   SiteSettings,
   AchievementSettings,
   DEFAULT_SETTINGS,
+  DEFAULT_ADMIN_PASSWORD,
 } from '../context/ContentContext';
 import { BrownieItem, BakingClassInfo } from '../data/brownies';
 import { db } from '../firebase';
-import { collection, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, updateDoc, setDoc, deleteDoc } from 'firebase/firestore';
 import {
   Settings,
   Image as ImageIcon,
@@ -17,7 +18,6 @@ import {
   Phone,
   Mail,
   Instagram,
-  Facebook,
   Plus,
   Trash2,
   Save,
@@ -36,13 +36,104 @@ import {
   ExternalLink,
   ShieldCheck,
   Check,
+  Gift,
+  Clock,
+  MapPin,
+  FolderUp,
+  Upload,
+  Eye,
+  EyeOff,
+  CheckCheck,
+  Filter,
+  TrendingUp,
+  AlertTriangle,
+  Search,
+  MessageCircle,
+  BarChart3,
+  CalendarDays,
+  Lock,
+  KeyRound,
 } from 'lucide-react';
+import {
+  compressImageFile,
+  OFFICIAL_INSTAGRAM_URL,
+  getInstagramUrl,
+  formatRupee,
+} from '../utils/formatters';
 
 interface AdminDashboardProps {
   adminEmail: string;
   onLogout: () => void;
   onViewWebsite: () => void;
 }
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+interface MonthInfo {
+  key: string;
+  label: string;
+  shortLabel: string;
+  year: number;
+  monthIndex: number;
+}
+
+const parseBookingMonth = (preferredDate?: string, createdAt?: string): MonthInfo => {
+  const currentYear = new Date().getFullYear();
+  let matchedMonthIdx = -1;
+  let year = currentYear;
+
+  if (preferredDate) {
+    const yrMatch = preferredDate.match(/\b(202[4-9])\b/);
+    if (yrMatch) year = parseInt(yrMatch[1], 10);
+
+    const lower = preferredDate.toLowerCase();
+    for (let i = 0; i < MONTH_NAMES.length; i++) {
+      const full = MONTH_NAMES[i].toLowerCase();
+      const short = full.slice(0, 3);
+      if (lower.includes(full) || lower.includes(short)) {
+        matchedMonthIdx = i;
+        break;
+      }
+    }
+  }
+
+  if (matchedMonthIdx === -1 && createdAt) {
+    try {
+      const d = new Date(createdAt);
+      if (!isNaN(d.getTime())) {
+        matchedMonthIdx = d.getMonth();
+        year = d.getFullYear();
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (matchedMonthIdx === -1) {
+    const now = new Date();
+    matchedMonthIdx = now.getMonth();
+    year = now.getFullYear();
+  }
+
+  const label = `${MONTH_NAMES[matchedMonthIdx]} ${year}`;
+  const shortLabel = `${MONTH_NAMES[matchedMonthIdx].slice(0, 3)} ${year}`;
+  const key = `${year}-${String(matchedMonthIdx + 1).padStart(2, '0')}`;
+
+  return { key, label, shortLabel, year, monthIndex: matchedMonthIdx };
+};
 
 const IMAGE_PRESETS = {
   hero1: [
@@ -103,6 +194,68 @@ const IMAGE_PRESETS = {
   ],
 };
 
+interface LocalImageUploaderProps {
+  label?: string;
+  onImageSelected: (dataUrl: string) => void;
+  className?: string;
+}
+
+const LocalImageUploader: React.FC<LocalImageUploaderProps> = ({
+  label = 'Upload from Device',
+  onImageSelected,
+  className = '',
+}) => {
+  const [isProcessing, setIsProcessing] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file (e.g. JPG, PNG, WebP).');
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      // Automatically compress and resize client-side to keep under 150KB for fast Firestore and localStorage sync
+      const compressedDataUrl = await compressImageFile(file, 1400, 0.82);
+      onImageSelected(compressedDataUrl);
+    } catch (err) {
+      console.error('Local photo processing error:', err);
+      alert('Failed to process image. Please try another photo.');
+    } finally {
+      setIsProcessing(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  return (
+    <div className="inline-block">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleFileChange}
+        className="hidden"
+      />
+      <button
+        type="button"
+        disabled={isProcessing}
+        onClick={() => fileInputRef.current?.click()}
+        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#3B211B] hover:bg-[#23120E] text-[#E8D6C3] hover:text-white text-xs font-semibold shadow-xs transition-all cursor-pointer disabled:opacity-50 ${className}`}
+        title="Upload photo directly from local device storage"
+      >
+        <FolderUp className="w-3.5 h-3.5 text-[#E5A962]" />
+        <span>{isProcessing ? 'Optimizing Photo...' : label}</span>
+      </button>
+    </div>
+  );
+};
+
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   adminEmail,
   onLogout,
@@ -113,6 +266,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     achievements,
     menuItems,
     bakingClasses,
+    customBrownies,
+    adminList,
+    adminPassword,
+    updateAdminPassword,
+    addAdminUser,
+    removeAdminUser,
     updateSettings,
     updateAchievements,
     addMenuItem,
@@ -121,14 +280,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     addClass,
     updateClass,
     deleteClass,
+    addCustomBrownie,
+    updateCustomBrownie,
+    deleteCustomBrownie,
     resetToDefaults,
   } = useContent();
 
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'contact' | 'images' | 'menu' | 'classes' | 'achievements' | 'bookings'
+    'overview' | 'contact' | 'images' | 'menu' | 'classes' | 'custom' | 'achievements' | 'bookings' | 'admins'
   >('overview');
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  // Admin Team Management & Strong Password form states
+  const [newAdminEmail, setNewAdminEmail] = useState('');
+  const [newAdminName, setNewAdminName] = useState('');
+  const [newAdminRole, setNewAdminRole] = useState<'co-admin' | 'manager'>('co-admin');
+  const [newAdminCustomPassword, setNewAdminCustomPassword] = useState('');
+  const [adminFormError, setAdminFormError] = useState<string | null>(null);
+  const [revokingAdminEmail, setRevokingAdminEmail] = useState<string | null>(null);
+
+  const [currentPwdInput, setCurrentPwdInput] = useState('');
+  const [newPwdInput, setNewPwdInput] = useState('');
+  const [confirmPwdInput, setConfirmPwdInput] = useState('');
+  const [showCurrentPwd, setShowCurrentPwd] = useState(false);
+  const [showNewPwd, setShowNewPwd] = useState(false);
+  const [pwdError, setPwdError] = useState<string | null>(null);
 
   // Draft states
   const [contactForm, setContactForm] = useState<SiteSettings>(settings);
@@ -136,8 +313,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [achForm, setAchForm] = useState<AchievementSettings>(achievements);
 
   const [expandedBrownieId, setExpandedBrownieId] = useState<string | null>(null);
+  const [expandedCustomBrownieId, setExpandedCustomBrownieId] = useState<string | null>(null);
   const [expandedClassId, setExpandedClassId] = useState<string | null>(null);
   const [classDateInputs, setClassDateInputs] = useState<Record<string, string>>({});
+
+  // Inline deletion confirmation states (completely bypasses blocked window.confirm in iframes)
+  const [deletingClassId, setDeletingClassId] = useState<string | null>(null);
+  const [deletingBrownieId, setDeletingBrownieId] = useState<string | null>(null);
+  const [deletingCustomId, setDeletingCustomId] = useState<string | null>(null);
+  const [deletingInquiryId, setDeletingInquiryId] = useState<string | null>(null);
+  const [deletingRegistrationId, setDeletingRegistrationId] = useState<string | null>(null);
+  const [confirmingResetDefaults, setConfirmingResetDefaults] = useState(false);
+
+  // Persistent deleted tracking so deleted records never resurrect in snapshot listener
+  const [deletedInquiryIds, setDeletedInquiryIds] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('browinegirl_deleted_inquiries') || '[]');
+    } catch {
+      return [];
+    }
+  });
+
+  const [deletedRegistrationIds, setDeletedRegistrationIds] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('browinegirl_deleted_registrations') || '[]');
+    } catch {
+      return [];
+    }
+  });
+
+  // Customer order (inquiries) filters & search
+  const [inquiryFilter, setInquiryFilter] = useState<'all' | 'unread' | 'read' | 'replied'>('all');
+  const [inquirySearch, setInquirySearch] = useState('');
+
+  // Customer bookings monthly early assessment states
+  const [selectedBookingMonth, setSelectedBookingMonth] = useState<string>('all');
+  const [bookingViewMode, setBookingViewMode] = useState<'monthly_assess' | 'list'>('monthly_assess');
+  const [bookingSearch, setBookingSearch] = useState('');
+  const [bookingStatusFilter, setBookingStatusFilter] = useState<'all' | 'registered' | 'waitlist' | 'cancelled'>('all');
+  const [bookingsSubTab, setBookingsSubTab] = useState<'all' | 'bookings' | 'inquiries'>('all');
 
   useEffect(() => {
     setContactForm(settings);
@@ -159,7 +373,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       (snapshot) => {
         const list: any[] = [];
         snapshot.forEach((d) => list.push({ id: d.id, ...d.data() }));
-        setAllRegistrations(list);
+        const storedDeleted = (() => {
+          try {
+            return JSON.parse(localStorage.getItem('browinegirl_deleted_registrations') || '[]');
+          } catch {
+            return [];
+          }
+        })();
+        setAllRegistrations(list.filter((reg) => !storedDeleted.includes(reg.id)));
       },
       (err) => console.warn('Registrations error:', err)
     );
@@ -169,7 +390,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       (snapshot) => {
         const list: any[] = [];
         snapshot.forEach((d) => list.push({ id: d.id, ...d.data() }));
-        setAllInquiries(list);
+        const storedDeleted = (() => {
+          try {
+            return JSON.parse(localStorage.getItem('browinegirl_deleted_inquiries') || '[]');
+          } catch {
+            return [];
+          }
+        })();
+        setAllInquiries(list.filter((inq) => !storedDeleted.includes(inq.id)));
       },
       (err) => console.warn('Inquiries error:', err)
     );
@@ -180,13 +408,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
   }, []);
 
+  // New custom showcase brownie state
+  const [isAddingCustomBrownie, setIsAddingCustomBrownie] = useState(false);
+  const [newCustomBrownie, setNewCustomBrownie] = useState<Omit<BrownieItem, 'id'>>({
+    name: '',
+    subtitle: '',
+    description: '',
+    price: '',
+    image: 'https://images.unsplash.com/photo-1606313564200-e75d5e30476c?q=85&w=800&auto=format&fit=crop',
+    badge: 'Artisan Custom',
+    cocoaPercentage: '70% Dark',
+    flavorNotes: ['Single Origin Belgian Cocoa', 'Flaky Sea Salt'],
+  });
+
   // New brownie state
   const [isAddingBrownie, setIsAddingBrownie] = useState(false);
   const [newBrownie, setNewBrownie] = useState<Omit<BrownieItem, 'id'>>({
     name: '',
     subtitle: '',
     description: '',
-    price: '$5.50 / piece',
+    price: '₹199 / piece',
     image: 'https://images.unsplash.com/photo-1606313564200-e75d5e30476c?q=80&w=1200&auto=format&fit=crop',
     badge: 'Seasonal Special',
     cocoaPercentage: '72% Dark',
@@ -199,7 +440,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     title: '',
     level: 'Beginner to Intermediate',
     duration: '2.5 Hours',
-    price: '$85 / person',
+    price: '₹1,999 / person',
     description: '',
     dates: ['Every Tuesday @ 6:00 PM (Live Online)', 'Saturday @ 11:00 AM (In-Studio)'],
   });
@@ -209,67 +450,275 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setTimeout(() => setSaveSuccess(null), 3500);
   };
 
+  // Customer order (inquiries) deletion & mark-as-read handlers
+  const handleDeleteInquiry = async (inquiryId: string, customerName?: string) => {
+    try {
+      const updated = [...deletedInquiryIds, inquiryId];
+      setDeletedInquiryIds(updated);
+      localStorage.setItem('browinegirl_deleted_inquiries', JSON.stringify(updated));
+      setAllInquiries((prev) => prev.filter((item) => item.id !== inquiryId));
+      setDeletingInquiryId(null);
+      await deleteDoc(doc(db, 'inquiries', inquiryId));
+      triggerSuccess(`Permanently deleted customer order from ${customerName || 'customer'}`);
+    } catch (err) {
+      console.warn('Firestore delete inquiry error (local removal preserved):', err);
+      setDeletingInquiryId(null);
+      triggerSuccess(`Deleted customer order from ${customerName || 'customer'}`);
+    }
+  };
+
+  const handleToggleInquiryRead = async (inq: any) => {
+    const isCurrentlyRead = inq.status === 'read' || inq.isRead === true;
+    const nextStatus = isCurrentlyRead ? 'new' : 'read';
+    const nextIsRead = !isCurrentlyRead;
+
+    setAllInquiries((prev) =>
+      prev.map((item) =>
+        item.id === inq.id
+          ? {
+              ...item,
+              status: nextStatus,
+              isRead: nextIsRead,
+              readAt: nextIsRead ? new Date().toISOString() : null,
+            }
+          : item
+      )
+    );
+
+    try {
+      await updateDoc(doc(db, 'inquiries', inq.id), {
+        status: nextStatus,
+        isRead: nextIsRead,
+        readAt: nextIsRead ? new Date().toISOString() : null,
+      });
+      triggerSuccess(nextIsRead ? 'Order marked as Read ✓' : 'Order marked as New / Unread');
+    } catch (err) {
+      console.warn('Firestore updateDoc error:', err);
+      triggerSuccess(nextIsRead ? 'Order marked as Read (local)' : 'Order marked as Unread (local)');
+    }
+  };
+
+  const handleUpdateInquiryStatus = async (inquiryId: string, newStatus: string) => {
+    const isRead = newStatus === 'read' || newStatus === 'replied' || newStatus === 'closed';
+    setAllInquiries((prev) =>
+      prev.map((item) =>
+        item.id === inquiryId
+          ? {
+              ...item,
+              status: newStatus,
+              isRead,
+              readAt: isRead ? new Date().toISOString() : null,
+            }
+          : item
+      )
+    );
+
+    try {
+      await updateDoc(doc(db, 'inquiries', inquiryId), {
+        status: newStatus,
+        isRead,
+        readAt: isRead ? new Date().toISOString() : null,
+      });
+      triggerSuccess(`Order status updated to "${newStatus}"`);
+    } catch (err) {
+      console.warn('Firestore error updating inquiry status:', err);
+    }
+  };
+
+  const handleMarkAllInquiriesAsRead = async () => {
+    const unread = allInquiries.filter((inq) => inq.status !== 'read' && !inq.isRead);
+    if (unread.length === 0) {
+      triggerSuccess('All customer orders are already marked as read!');
+      return;
+    }
+
+    setAllInquiries((prev) =>
+      prev.map((item) => ({
+        ...item,
+        status: 'read',
+        isRead: true,
+        readAt: new Date().toISOString(),
+      }))
+    );
+
+    try {
+      await Promise.all(
+        unread.map((inq) =>
+          updateDoc(doc(db, 'inquiries', inq.id), {
+            status: 'read',
+            isRead: true,
+            readAt: new Date().toISOString(),
+          })
+        )
+      );
+      triggerSuccess(`Marked ${unread.length} customer order(s) as read!`);
+    } catch (err) {
+      console.warn('Firestore bulk update error:', err);
+      triggerSuccess(`Marked ${unread.length} customer order(s) as read`);
+    }
+  };
+
+  // Customer booking deletion handler
+  const handleDeleteRegistration = async (regId: string, studentName?: string) => {
+    try {
+      const updated = [...deletedRegistrationIds, regId];
+      setDeletedRegistrationIds(updated);
+      localStorage.setItem('browinegirl_deleted_registrations', JSON.stringify(updated));
+      setAllRegistrations((prev) => prev.filter((item) => item.id !== regId));
+      setDeletingRegistrationId(null);
+      await deleteDoc(doc(db, 'class_registrations', regId));
+      triggerSuccess(`Permanently removed booking for ${studentName || 'student'}`);
+    } catch (err) {
+      console.warn('Firestore delete registration error (local removal preserved):', err);
+      setDeletingRegistrationId(null);
+      triggerSuccess(`Removed booking for ${studentName || 'student'}`);
+    }
+  };
+
+  // Sample seeders for testing
+  const handleAddSampleBooking = async (monthName: string, year = 2026) => {
+    const sampleNames = ['Aarav Sharma', 'Priya Menon', 'Kavita Patel', 'Rohan Iyer', 'Ananya Deshmukh'];
+    const randomName = sampleNames[Math.floor(Math.random() * sampleNames.length)];
+    const randomClass = bakingClasses[Math.floor(Math.random() * bakingClasses.length)] || {
+      title: 'The Ultimate Fudgy Brownie Masterclass',
+    };
+    const sampleId = `sample_reg_${Date.now()}`;
+    const newReg = {
+      id: sampleId,
+      userId: `user_${Date.now()}`,
+      userName: randomName,
+      userEmail: `${randomName.toLowerCase().replace(' ', '.')}@example.com`,
+      className: randomClass.title,
+      preferredDate: `Saturday, ${monthName} 14, ${year} @ 10:00 AM`,
+      notes: 'Gift booking from family; wants to master shiny crinkly crust technique.',
+      status: 'registered',
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      await setDoc(doc(db, 'class_registrations', newReg.id), newReg);
+      triggerSuccess(`Added test booking for ${monthName} ${year} (${randomName})`);
+    } catch {
+      setAllRegistrations((prev) => [newReg, ...prev]);
+      triggerSuccess(`Added test booking for ${monthName} ${year}`);
+    }
+  };
+
+  const handleAddSampleInquiry = async () => {
+    const sampleInquiry = {
+      id: `sample_inq_${Date.now()}`,
+      userId: `guest_${Date.now()}`,
+      userName: 'Siddharth Varma',
+      userEmail: 'siddharth.varma@example.com',
+      userPhone: '9840123456',
+      subject: 'Custom Order Inquiry: Corporate Gifting & Celebration Boxes',
+      message:
+        'Hello Elena,\n\nEvent Type: Corporate Anniversary\nBatch Size: 80 Artisan Pieces\nEvent Date: Nov 20, 2026\nSelected Flavors: Signature Gold Flake Ganache, 74% Roasted Sesame Tahini Swirl, Aged Bourbon & Walnut.\n\nWe need individually boxed hampers with personalized gold ribbon branding.',
+      status: 'new',
+      isRead: false,
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      await setDoc(doc(db, 'inquiries', sampleInquiry.id), sampleInquiry);
+      triggerSuccess('Added test custom order inquiry!');
+    } catch {
+      setAllInquiries((prev) => [sampleInquiry, ...prev]);
+      triggerSuccess('Added test custom order inquiry');
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-[#2A1612] text-[#F8F0E5] flex flex-col font-sans">
+    <div className="min-h-screen bg-[#2A1612] text-[#F8F0E5] flex flex-col font-sans overflow-x-hidden">
       {/* Top Header Bar */}
-      <header className="bg-[#1F0F0C] border-b border-[#3B211B] px-4 sm:px-8 py-3.5 flex items-center justify-between sticky top-0 z-40 shadow-lg">
-        <div className="flex items-center gap-3">
+      <header className="bg-[#1F0F0C] border-b border-[#3B211B] px-3 sm:px-8 py-3 flex items-center justify-between sticky top-0 z-40 shadow-lg gap-2">
+        <div className="flex items-center gap-2.5 min-w-0">
           <button
             onClick={() => setMobileSidebarOpen(!mobileSidebarOpen)}
-            className="md:hidden p-2 rounded-xl bg-white/10 hover:bg-white/20 text-[#E8D6C3]"
+            className="md:hidden w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-[#E8D6C3] flex items-center justify-center shrink-0 cursor-pointer"
+            aria-label="Toggle navigation drawer"
           >
             {mobileSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
 
-          <div className="w-10 h-10 rounded-xl bg-[#C47B55] flex items-center justify-center text-white shadow-md">
-            <ShieldCheck className="w-6 h-6" />
+          <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-[#C47B55] flex items-center justify-center text-white shadow-md shrink-0">
+            <ShieldCheck className="w-5 h-5 sm:w-6 sm:h-6" />
           </div>
 
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="font-serif text-lg sm:text-xl font-bold tracking-tight text-[#F8F0E5]">
-                BrowineGirlCakes Admin Dashboard
+              <h1 className="font-serif text-sm sm:text-xl font-bold tracking-tight text-[#F8F0E5] truncate">
+                BROWNIEGIRLCAKES Admin
               </h1>
-              <span className="hidden sm:inline-block text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-[#E5A962] text-[#23120E]">
+              <span className="hidden sm:inline-block text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-[#E5A962] text-[#23120E] shrink-0">
                 Authenticated
               </span>
             </div>
-            <p className="text-[11px] text-[#E8D6C3]/70 hidden sm:block">
-              Logged in as: <strong className="text-white">{adminEmail}</strong> &bull; Changes update public website immediately
+            <p className="text-[10px] sm:text-[11px] text-[#E8D6C3]/70 truncate">
+              <strong className="text-white">{adminEmail}</strong>
+              <span className="hidden sm:inline"> &bull; Changes update public website immediately</span>
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {confirmingResetDefaults ? (
+            <div className="hidden lg:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-red-950/80 border border-red-500 text-xs text-white">
+              <span className="font-bold text-[11px]">Reset all to defaults?</span>
+              <button
+                type="button"
+                onClick={() => {
+                  resetToDefaults();
+                  setConfirmingResetDefaults(false);
+                  triggerSuccess('Reset to default bakery content successfully!');
+                }}
+                className="px-2 py-0.5 bg-red-600 hover:bg-red-500 text-white rounded font-bold text-[10px] cursor-pointer"
+              >
+                Yes
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingResetDefaults(false)}
+                className="px-2 py-0.5 bg-white/20 hover:bg-white/30 text-white rounded font-semibold text-[10px] cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmingResetDefaults(true)}
+              title="Reset to factory defaults"
+              className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs text-[#E8D6C3] transition-colors cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Reset Defaults</span>
+            </button>
+          )}
+
+          {/* Quick Security / Password Button */}
           <button
-            onClick={() => {
-              if (confirm('Reset website content to artisan bakery defaults?')) {
-                resetToDefaults();
-                triggerSuccess('Reset to default bakery content successfully!');
-              }
-            }}
-            title="Reset to factory defaults"
-            className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs text-[#E8D6C3] transition-colors cursor-pointer"
+            onClick={() => setActiveTab('admins')}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-full bg-white/10 hover:bg-white/20 text-[#E5A962] text-xs font-semibold transition-all cursor-pointer border border-[#E5A962]/30"
+            title="Manage Admin Password & Team Access"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Reset Defaults</span>
+            <KeyRound className="w-3.5 h-3.5" />
+            <span>Password &amp; Admins</span>
           </button>
 
           {/* View Live Storefront Button */}
           <button
             onClick={onViewWebsite}
-            className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs sm:text-sm font-semibold transition-all cursor-pointer border border-[#C47B55]/40"
+            className="flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition-all cursor-pointer border border-[#C47B55]/40 min-h-[38px]"
           >
-            <Globe className="w-4 h-4 text-[#C47B55]" />
+            <Globe className="w-3.5 h-3.5 text-[#C47B55] shrink-0" />
             <span className="hidden sm:inline">View Public Website</span>
-            <span className="sm:hidden">Website</span>
-            <ExternalLink className="w-3.5 h-3.5 text-[#E8D6C3]/60" />
+            <span className="sm:hidden">Store</span>
           </button>
 
           {/* Logout Button */}
           <button
             onClick={onLogout}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-950/70 hover:bg-red-900 border border-red-700/50 text-red-200 text-xs font-semibold transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl bg-red-950/70 hover:bg-red-900 border border-red-700/50 text-red-200 text-xs font-semibold transition-colors cursor-pointer min-h-[38px]"
             title="Sign out of Admin Dashboard"
           >
             <LogOut className="w-3.5 h-3.5" />
@@ -278,24 +727,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </header>
 
+      {/* Mobile Horizontally Scrollable Quick-Tab Bar */}
+      <div className="md:hidden flex items-center gap-1.5 overflow-x-auto px-3 py-2 bg-[#23120E] border-b border-[#3B211B] sticky top-[57px] z-30">
+        {(
+          [
+            { id: 'overview', label: 'Overview' },
+            { id: 'bookings', label: `Bookings (${allRegistrations.length + allInquiries.length})` },
+            { id: 'admins', label: 'Password & Admins' },
+            { id: 'menu', label: 'Menu' },
+            { id: 'classes', label: 'Classes' },
+            { id: 'custom', label: 'Custom' },
+            { id: 'contact', label: 'Contact' },
+            { id: 'images', label: 'Images' },
+            { id: 'achievements', label: 'Awards' },
+          ] as const
+        ).map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => {
+              setActiveTab(tab.id);
+              setMobileSidebarOpen(false);
+            }}
+            className={`px-3 py-1.5 rounded-full text-[11px] font-bold whitespace-nowrap shrink-0 transition-all cursor-pointer ${
+              activeTab === tab.id
+                ? 'bg-[#C47B55] text-white shadow-xs'
+                : 'bg-white/5 text-[#E8D6C3]/80 hover:bg-white/10'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       {/* Save Notification Banner */}
       {saveSuccess && (
-        <div className="bg-emerald-600 text-white px-6 py-2.5 text-xs font-semibold flex items-center justify-between sticky top-[61px] z-30 animate-in slide-in-from-top-2 shadow-md">
+        <div className="bg-emerald-600 text-white px-4 sm:px-6 py-2.5 text-xs font-semibold flex items-center justify-between sticky top-[98px] md:top-[61px] z-30 animate-in slide-in-from-top-2 shadow-md">
           <span className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-200" />
-            {saveSuccess}
+            <CheckCircle2 className="w-4 h-4 text-emerald-200 shrink-0" />
+            <span>{saveSuccess}</span>
           </span>
-          <span className="text-[11px] text-emerald-100 font-mono">Synced to Live Website</span>
+          <span className="hidden sm:inline text-[11px] text-emerald-100 font-mono">Synced Live</span>
         </div>
       )}
 
       {/* Main Container */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* Mobile Sidebar Backdrop Overlay */}
+        {mobileSidebarOpen && (
+          <div
+            onClick={() => setMobileSidebarOpen(false)}
+            className="fixed inset-0 bg-black/60 backdrop-blur-xs z-20 md:hidden animate-in fade-in"
+            aria-hidden="true"
+          />
+        )}
+
         {/* Left Navigation Sidebar */}
         <aside
           className={`${
             mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
-          } fixed md:static inset-y-0 left-0 top-[61px] z-30 w-64 bg-[#1F0F0C] border-r border-[#3B211B] flex flex-col justify-between p-4 transition-transform duration-200 ease-in-out shrink-0`}
+          } fixed md:static inset-y-0 left-0 top-[57px] z-30 w-64 bg-[#1F0F0C] border-r border-[#3B211B] flex flex-col justify-between p-4 transition-transform duration-200 ease-in-out shrink-0 overflow-y-auto`}
         >
           <div className="space-y-1">
             <div className="px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-[#C47B55]">
@@ -413,6 +904,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <span className="flex-1 text-left">Customer Bookings</span>
               <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-white/10">
                 {allRegistrations.length + allInquiries.length}
+              </span>
+            </button>
+
+            <button
+              onClick={() => {
+                setActiveTab('custom');
+                setMobileSidebarOpen(false);
+              }}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'custom'
+                  ? 'bg-[#C47B55] text-white shadow-md'
+                  : 'text-[#E8D6C3]/80 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <Gift className="w-4 h-4" />
+              <span className="flex-1 text-left">Custom Showcase</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-white/10 font-bold">
+                {customBrownies.length}
+              </span>
+            </button>
+
+            <button
+              onClick={() => {
+                setActiveTab('admins');
+                setMobileSidebarOpen(false);
+              }}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'admins'
+                  ? 'bg-[#C47B55] text-white shadow-md'
+                  : 'text-[#E8D6C3]/80 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4 text-[#E5A962]" />
+              <span className="flex-1 text-left">Admin Team & Access</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-white/10 font-bold">
+                {adminList.length}
               </span>
             </button>
           </div>
@@ -547,6 +1074,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </p>
                 </div>
               </div>
+
+              {/* Admin Team Quick Access Banner */}
+              <div className="bg-[#2A1612] text-[#F8F0E5] p-6 rounded-3xl border border-[#3B211B] shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-[#E5A962]" />
+                    <span className="text-xs font-bold uppercase tracking-wider text-[#E5A962]">
+                      Admin Team & Access Control
+                    </span>
+                  </div>
+                  <h3 className="font-serif text-xl font-bold text-[#F8F0E5]">
+                    {adminList.length} Authorized Administrators Active
+                  </h3>
+                  <p className="text-xs text-[#E8D6C3]/75">
+                    Official email: <strong className="text-white">{settings.email}</strong> &bull; Add another person by email to grant dashboard access.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('admins')}
+                  className="px-5 py-2.5 rounded-full bg-[#C47B55] hover:bg-[#D98B5F] text-white text-xs font-bold shadow-md transition-all cursor-pointer shrink-0 flex items-center gap-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add / Manage Admins</span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -555,23 +1108,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in">
               <div>
                 <span className="text-xs font-bold text-[#C47B55] uppercase tracking-wider">
-                  Visual Assets
+                  Visual Assets & Local Storage
                 </span>
                 <h3 className="font-serif text-2xl font-bold text-[#3B211B] mt-0.5">
                   Change Hero Carousel & Bakery Section Images
                 </h3>
                 <p className="text-xs text-[#3B211B]/70 mt-1">
-                  Paste any high-resolution image URL or choose from curated 1-click bakery photography presets.
+                  Upload photos directly from your computer or phone local storage, paste an image URL, or pick from curated bakery presets.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Hero Slide 1 */}
                 <div className="bg-white p-6 rounded-3xl border border-[#E8D6C3] shadow-sm space-y-3">
-                  <span className="text-xs font-bold text-[#C47B55] uppercase tracking-wider block">
-                    Hero Slide 1: The Baker Behind the Brand
-                  </span>
-                  <div className="h-48 w-full rounded-2xl overflow-hidden bg-black/10 border border-[#E8D6C3]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#C47B55] uppercase tracking-wider block">
+                      Hero Slide 1: The Baker Behind the Brand
+                    </span>
+                    <LocalImageUploader
+                      label="Upload Local Photo"
+                      onImageSelected={(dataUrl) => {
+                        setImageForm((prev) => ({ ...prev, heroSlide1Image: dataUrl }));
+                        triggerSuccess('Loaded local photo for Hero Slide 1! Remember to save changes.');
+                      }}
+                    />
+                  </div>
+                  <div className="h-48 w-full rounded-2xl overflow-hidden bg-black/10 border border-[#E8D6C3] relative group">
                     <img
                       src={imageForm.heroSlide1Image}
                       alt="Hero Slide 1"
@@ -583,12 +1145,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-[#3B211B] block mb-1">
-                      Direct Photo URL:
+                      Direct Photo URL or Local Upload Data:
                     </label>
                     <input
                       type="text"
                       value={imageForm.heroSlide1Image}
                       onChange={(e) => setImageForm({ ...imageForm, heroSlide1Image: e.target.value })}
+                      placeholder="Paste URL or use Upload button above"
                       className="w-full p-2.5 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs font-mono text-[#3B211B]"
                     />
                   </div>
@@ -617,9 +1180,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 {/* Hero Slide 2 */}
                 <div className="bg-white p-6 rounded-3xl border border-[#E8D6C3] shadow-sm space-y-3">
-                  <span className="text-xs font-bold text-[#C47B55] uppercase tracking-wider block">
-                    Hero Slide 2: The Chocolate Experience
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#C47B55] uppercase tracking-wider block">
+                      Hero Slide 2: The Chocolate Experience
+                    </span>
+                    <LocalImageUploader
+                      label="Upload Local Photo"
+                      onImageSelected={(dataUrl) => {
+                        setImageForm((prev) => ({ ...prev, heroSlide2Image: dataUrl }));
+                        triggerSuccess('Loaded local photo for Hero Slide 2! Remember to save changes.');
+                      }}
+                    />
+                  </div>
                   <div className="h-48 w-full rounded-2xl overflow-hidden bg-black/10 border border-[#E8D6C3]">
                     <img
                       src={imageForm.heroSlide2Image}
@@ -632,12 +1204,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-[#3B211B] block mb-1">
-                      Direct Photo URL:
+                      Direct Photo URL or Local Upload Data:
                     </label>
                     <input
                       type="text"
                       value={imageForm.heroSlide2Image}
                       onChange={(e) => setImageForm({ ...imageForm, heroSlide2Image: e.target.value })}
+                      placeholder="Paste URL or use Upload button above"
                       className="w-full p-2.5 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs font-mono text-[#3B211B]"
                     />
                   </div>
@@ -666,9 +1239,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 {/* Hero Slide 3 */}
                 <div className="bg-white p-6 rounded-3xl border border-[#E8D6C3] shadow-sm space-y-3">
-                  <span className="text-xs font-bold text-[#C47B55] uppercase tracking-wider block">
-                    Hero Slide 3: Baking Studio Workshop
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#C47B55] uppercase tracking-wider block">
+                      Hero Slide 3: Baking Studio Workshop
+                    </span>
+                    <LocalImageUploader
+                      label="Upload Local Photo"
+                      onImageSelected={(dataUrl) => {
+                        setImageForm((prev) => ({ ...prev, heroSlide3Image: dataUrl }));
+                        triggerSuccess('Loaded local photo for Hero Slide 3! Remember to save changes.');
+                      }}
+                    />
+                  </div>
                   <div className="h-48 w-full rounded-2xl overflow-hidden bg-black/10 border border-[#E8D6C3]">
                     <img
                       src={imageForm.heroSlide3Image}
@@ -681,12 +1263,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-[#3B211B] block mb-1">
-                      Direct Photo URL:
+                      Direct Photo URL or Local Upload Data:
                     </label>
                     <input
                       type="text"
                       value={imageForm.heroSlide3Image}
                       onChange={(e) => setImageForm({ ...imageForm, heroSlide3Image: e.target.value })}
+                      placeholder="Paste URL or use Upload button above"
                       className="w-full p-2.5 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs font-mono text-[#3B211B]"
                     />
                   </div>
@@ -715,9 +1298,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 {/* About Section Baker Photo */}
                 <div className="bg-white p-6 rounded-3xl border border-[#E8D6C3] shadow-sm space-y-3">
-                  <span className="text-xs font-bold text-[#C47B55] uppercase tracking-wider block">
-                    Our Story: Artisan Baker Portrait
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#C47B55] uppercase tracking-wider block">
+                      Our Story: Artisan Baker Portrait
+                    </span>
+                    <LocalImageUploader
+                      label="Upload Local Photo"
+                      onImageSelected={(dataUrl) => {
+                        setImageForm((prev) => ({ ...prev, aboutImage: dataUrl }));
+                        triggerSuccess('Loaded local photo for Baker Story! Remember to save changes.');
+                      }}
+                    />
+                  </div>
                   <div className="h-48 w-full rounded-2xl overflow-hidden bg-black/10 border border-[#E8D6C3]">
                     <img
                       src={imageForm.aboutImage}
@@ -730,12 +1322,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-[#3B211B] block mb-1">
-                      Direct Photo URL:
+                      Direct Photo URL or Local Upload Data:
                     </label>
                     <input
                       type="text"
                       value={imageForm.aboutImage}
                       onChange={(e) => setImageForm({ ...imageForm, aboutImage: e.target.value })}
+                      placeholder="Paste URL or use Upload button above"
                       className="w-full p-2.5 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs font-mono text-[#3B211B]"
                     />
                   </div>
@@ -829,55 +1422,80 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                   {/* Bakery Email */}
                   <div className="sm:col-span-2">
-                    <label className="block text-xs font-bold uppercase tracking-wider text-[#3B211B] mb-2 flex items-center gap-1.5">
-                      <Mail className="w-3.5 h-3.5 text-[#C47B55]" />
-                      Bakery Contact Email
-                    </label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-[#3B211B] flex items-center gap-1.5">
+                        <Mail className="w-3.5 h-3.5 text-[#C47B55]" />
+                        Official Bakery Contact Email
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setContactForm({ ...contactForm, email: 'preethipreethu712@gmail.com' });
+                          triggerSuccess('Applied official bakery email: preethipreethu712@gmail.com!');
+                        }}
+                        className="text-[10px] text-[#C47B55] hover:underline font-bold cursor-pointer"
+                      >
+                        Set Official Mail (preethipreethu712@gmail.com)
+                      </button>
+                    </div>
                     <input
                       type="email"
                       value={contactForm.email}
                       onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
-                      placeholder="hello@browinegirlcakes.com"
+                      placeholder="preethipreethu712@gmail.com"
                       className="w-full p-3 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-sm font-semibold text-[#3B211B] focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
                     />
                   </div>
 
-                  {/* Instagram ID */}
+                  {/* Instagram ID or Full URL */}
                   <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-[#3B211B] mb-2 flex items-center gap-1.5">
-                      <Instagram className="w-3.5 h-3.5 text-[#C47B55]" />
-                      Instagram Username / ID
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-3 text-sm text-[#3B211B]/60">@</span>
-                      <input
-                        type="text"
-                        value={contactForm.instagramId}
-                        onChange={(e) => setContactForm({ ...contactForm, instagramId: e.target.value })}
-                        placeholder="browinegirlcakes"
-                        className="w-full p-3 pl-8 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-sm font-semibold text-[#3B211B] focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
-                      />
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-bold uppercase tracking-wider text-[#3B211B] flex items-center gap-1.5">
+                        <Instagram className="w-3.5 h-3.5 text-[#C47B55]" />
+                        Instagram URL or Profile ID
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setContactForm({ ...contactForm, instagramId: OFFICIAL_INSTAGRAM_URL });
+                          triggerSuccess('Applied official working Instagram profile URL!');
+                        }}
+                        className="text-[10px] text-[#C47B55] hover:underline font-bold cursor-pointer"
+                        title="Click to paste the verified official Instagram URL"
+                      >
+                        Set Official URL
+                      </button>
                     </div>
-                    <p className="text-[11px] text-[#3B211B]/60 mt-1.5">
-                      Links to: instagram.com/{contactForm.instagramId || 'browinegirlcakes'}
-                    </p>
+                    <input
+                      type="text"
+                      value={contactForm.instagramId}
+                      onChange={(e) => setContactForm({ ...contactForm, instagramId: e.target.value })}
+                      placeholder="e.g. https://www.instagram.com/browniegirlcakes?exln=dTU4eXBuMjNmYmJr"
+                      className="w-full p-3 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs font-mono text-[#3B211B] focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
+                    />
+                    <div className="mt-1.5 flex items-center justify-between text-[11px] text-[#3B211B]/70">
+                      <span className="truncate">
+                        Resolves to: <a href={getInstagramUrl(contactForm.instagramId)} target="_blank" rel="noopener noreferrer" className="text-[#C47B55] font-semibold underline truncate inline-block max-w-[240px] align-bottom">{getInstagramUrl(contactForm.instagramId)}</a>
+                      </span>
+                      <ExternalLink className="w-3 h-3 text-[#C47B55] shrink-0 ml-1" />
+                    </div>
                   </div>
 
-                  {/* Facebook ID */}
+                  {/* WhatsApp Inquiry Number */}
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-[#3B211B] mb-2 flex items-center gap-1.5">
-                      <Facebook className="w-3.5 h-3.5 text-[#C47B55]" />
-                      Facebook Page ID / Username
+                      <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                      WhatsApp Inquiry Phone Number
                     </label>
                     <input
                       type="text"
-                      value={contactForm.facebookId}
-                      onChange={(e) => setContactForm({ ...contactForm, facebookId: e.target.value })}
-                      placeholder="browinegirlcakes"
+                      value={contactForm.whatsappNumber || '7339651529'}
+                      onChange={(e) => setContactForm({ ...contactForm, whatsappNumber: e.target.value })}
+                      placeholder="7339651529"
                       className="w-full p-3 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-sm font-semibold text-[#3B211B] focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
                     />
                     <p className="text-[11px] text-[#3B211B]/60 mt-1.5">
-                      Links to: facebook.com/{contactForm.facebookId || 'browinegirlcakes'}
+                      Customer chats route directly to WhatsApp (+91 {contactForm.whatsappNumber || '7339651529'})
                     </p>
                   </div>
                 </div>
@@ -966,7 +1584,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         type="text"
                         value={newBrownie.price}
                         onChange={(e) => setNewBrownie({ ...newBrownie, price: e.target.value })}
-                        placeholder="$5.50 / piece"
+                        placeholder="₹199 / piece"
                         className="w-full p-2.5 bg-[#F8F0E5]/50 border border-[#E8D6C3] rounded-xl text-xs font-bold text-[#3B211B]"
                       />
                     </div>
@@ -991,12 +1609,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="text-xs font-bold text-[#3B211B] block mb-1">Image URL</label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-[#3B211B]">Brownie Photo</label>
+                        <LocalImageUploader
+                          label="Upload Local"
+                          className="py-1 px-2 text-[10px]"
+                          onImageSelected={(dataUrl) => {
+                            setNewBrownie((prev) => ({ ...prev, image: dataUrl }));
+                            triggerSuccess('Loaded local photo for new brownie!');
+                          }}
+                        />
+                      </div>
                       <input
                         type="text"
                         value={newBrownie.image}
                         onChange={(e) => setNewBrownie({ ...newBrownie, image: e.target.value })}
-                        placeholder="https://images.unsplash.com/..."
+                        placeholder="Paste image URL or use Upload Local"
                         className="w-full p-2.5 bg-[#F8F0E5]/50 border border-[#E8D6C3] rounded-xl text-xs text-[#3B211B] font-mono"
                       />
                     </div>
@@ -1078,9 +1706,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
 
                       {/* Quick Price & Image Editor */}
-                      <div className="pt-3 border-t border-[#F8F0E5] grid grid-cols-2 gap-3 items-center">
+                      <div className="pt-3 border-t border-[#F8F0E5] grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
                         <div>
-                          <label className="text-[10px] font-bold text-[#3B211B] block">Change Price</label>
+                          <label className="text-[10px] font-bold text-[#3B211B] block">Change Price (₹)</label>
                           <input
                             type="text"
                             value={brownie.price}
@@ -1090,11 +1718,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </div>
 
                         <div>
-                          <label className="text-[10px] font-bold text-[#3B211B] block">Image URL</label>
+                          <div className="flex items-center justify-between mb-0.5">
+                            <label className="text-[10px] font-bold text-[#3B211B]">Photo URL / Upload</label>
+                            <LocalImageUploader
+                              label="Upload"
+                              className="py-0.5 px-2 text-[9px]"
+                              onImageSelected={(dataUrl) => {
+                                updateMenuItem(brownie.id, { image: dataUrl });
+                                triggerSuccess(`Updated photo for "${brownie.name}" from local device!`);
+                              }}
+                            />
+                          </div>
                           <input
                             type="text"
                             value={brownie.image}
                             onChange={(e) => updateMenuItem(brownie.id, { image: e.target.value })}
+                            placeholder="Image URL or local photo"
                             className="w-full p-2 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-lg text-[11px] font-mono text-[#3B211B] truncate"
                           />
                         </div>
@@ -1162,19 +1801,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <span>{isExpanded ? 'Hide Extra Fields' : 'Edit Name & Details'}</span>
                         </button>
 
-                        <button
-                          onClick={async () => {
-                            if (confirm(`Delete "${brownie.name}" from the menu?`)) {
-                              await deleteMenuItem(brownie.id);
-                              triggerSuccess(`Deleted "${brownie.name}"`);
-                            }
-                          }}
-                          className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg text-xs flex items-center gap-1 cursor-pointer font-semibold"
-                          title="Delete brownie"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Delete</span>
-                        </button>
+                        {deletingBrownieId === brownie.id ? (
+                          <div className="flex items-center gap-1.5 p-1 bg-red-50 border border-red-300 rounded-xl animate-in fade-in">
+                            <span className="text-[10px] font-bold text-red-700 px-1">Delete item?</span>
+                            <button
+                              type="button"
+                              onClick={async (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                await deleteMenuItem(brownie.id);
+                                setDeletingBrownieId(null);
+                                triggerSuccess(`Deleted "${brownie.name}"`);
+                              }}
+                              className="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded-md text-[10px] font-bold cursor-pointer"
+                            >
+                              Yes
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setDeletingBrownieId(null);
+                              }}
+                              className="px-2 py-0.5 bg-white text-[#3B211B] rounded-md text-[10px] font-semibold cursor-pointer border border-[#E8D6C3]"
+                            >
+                              No
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setDeletingBrownieId(brownie.id);
+                            }}
+                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg text-xs flex items-center gap-1 cursor-pointer font-semibold"
+                            title="Delete brownie"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -1241,7 +1910,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         type="text"
                         value={newClass.price}
                         onChange={(e) => setNewClass({ ...newClass, price: e.target.value })}
-                        placeholder="$85 / person"
+                        placeholder="₹1,999 / person"
                         className="w-full p-2.5 bg-[#F8F0E5]/50 border border-[#E8D6C3] rounded-xl text-xs font-bold text-[#3B211B]"
                       />
                     </div>
@@ -1347,18 +2016,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               className="p-2 px-3 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs font-bold text-[#3B211B] w-28 text-right"
                             />
                           </div>
-                          <button
-                            onClick={async () => {
-                              if (confirm(`Delete class "${cls.title}"?`)) {
-                                await deleteClass(cls.id);
-                                triggerSuccess(`Deleted class "${cls.title}"`);
-                              }
-                            }}
-                            className="p-2.5 text-red-600 hover:bg-red-50 rounded-xl cursor-pointer"
-                            title="Delete class"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {deletingClassId === cls.id ? (
+                            <div className="flex items-center gap-1.5 p-1.5 bg-red-50 border border-red-300 rounded-xl animate-in fade-in shadow-xs">
+                              <span className="text-[11px] font-bold text-red-700 px-1">Delete class?</span>
+                              <button
+                                type="button"
+                                onClick={async (e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  await deleteClass(cls.id);
+                                  setDeletingClassId(null);
+                                  triggerSuccess(`Permanently deleted class "${cls.title}"`);
+                                }}
+                                className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[11px] font-bold cursor-pointer transition-colors"
+                              >
+                                Yes, Delete
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setDeletingClassId(null);
+                                }}
+                                className="px-2 py-1 bg-white hover:bg-stone-100 text-[#3B211B] rounded-lg text-[11px] font-semibold cursor-pointer border border-[#E8D6C3] transition-colors"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setDeletingClassId(cls.id);
+                              }}
+                              className="p-2.5 text-red-600 hover:bg-red-50 rounded-xl cursor-pointer transition-colors"
+                              title="Delete masterclass"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -1367,31 +2066,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-[#3B211B] uppercase tracking-wider flex items-center gap-1.5">
                             <Calendar className="w-3.5 h-3.5 text-[#C47B55]" />
-                            Scheduled Class Times ({cls.dates.length} Available Slots):
+                            Scheduled Class Times ({(cls.dates || []).length} Available Slots):
                           </span>
                         </div>
 
                         <div className="space-y-2">
-                          {cls.dates.map((dateStr, dIdx) => (
+                          {(cls.dates || []).map((dateStr, dIdx) => (
                             <div key={dIdx} className="flex items-center gap-2">
                               <input
                                 type="text"
                                 value={dateStr}
                                 onChange={(e) => {
-                                  const newDates = [...cls.dates];
+                                  const newDates = [...(cls.dates || [])];
                                   newDates[dIdx] = e.target.value;
                                   updateClass(cls.id, { dates: newDates });
                                 }}
                                 className="flex-1 p-2.5 bg-white border border-[#E8D6C3] rounded-xl text-xs text-[#3B211B] font-medium"
                               />
                               <button
-                                onClick={() => {
-                                  const newDates = cls.dates.filter((_, idx) => idx !== dIdx);
-                                  updateClass(cls.id, { dates: newDates });
-                                  triggerSuccess('Removed date slot');
+                                type="button"
+                                onClick={async (e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  const newDates = (cls.dates || []).filter((_, idx) => idx !== dIdx);
+                                  await updateClass(cls.id, { dates: newDates });
+                                  triggerSuccess('Removed scheduled class time slot');
                                 }}
-                                className="p-2 text-red-600 hover:bg-red-100 rounded-lg text-xs cursor-pointer"
-                                title="Remove date slot"
+                                className="p-2 text-red-600 hover:bg-red-100 rounded-lg text-xs cursor-pointer transition-colors"
+                                title="Remove scheduled class time slot"
                               >
                                 <X className="w-3.5 h-3.5" />
                               </button>
@@ -1408,17 +2110,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             onChange={(e) =>
                               setClassDateInputs({ ...classDateInputs, [cls.id]: e.target.value })
                             }
+                            onKeyDown={async (e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                if (!currentAddDate.trim()) return;
+                                const newDates = [...(cls.dates || []), currentAddDate.trim()];
+                                await updateClass(cls.id, { dates: newDates });
+                                setClassDateInputs({ ...classDateInputs, [cls.id]: '' });
+                                triggerSuccess('Added new class session time!');
+                              }
+                            }}
                             className="flex-1 p-2.5 bg-white border border-[#E8D6C3] rounded-xl text-xs text-[#3B211B]"
                           />
                           <button
-                            onClick={() => {
+                            type="button"
+                            onClick={async (e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
                               if (!currentAddDate.trim()) return;
-                              const newDates = [...cls.dates, currentAddDate.trim()];
-                              updateClass(cls.id, { dates: newDates });
+                              const newDates = [...(cls.dates || []), currentAddDate.trim()];
+                              await updateClass(cls.id, { dates: newDates });
                               setClassDateInputs({ ...classDateInputs, [cls.id]: '' });
                               triggerSuccess('Added new class session time!');
                             }}
-                            className="px-4 py-2.5 bg-[#C47B55] hover:bg-[#D98B5F] text-white rounded-xl text-xs font-bold cursor-pointer"
+                            className="px-4 py-2.5 bg-[#C47B55] hover:bg-[#D98B5F] text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
                           >
                             + Add Time Slot
                           </button>
@@ -1731,117 +2446,1802 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           )}
 
-          {/* TAB 6: CUSTOMER BOOKINGS & INQUIRIES */}
-          {activeTab === 'bookings' && (
-            <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in">
+          {/* TAB 6: CUSTOMER BOOKINGS & CUSTOMER ORDERS */}
+          {activeTab === 'bookings' && (() => {
+            // Helper to get class price estimate
+            const getPriceNum = (classNameStr: string) => {
+              const match = bakingClasses.find(
+                (c) =>
+                  c.title.toLowerCase().includes((classNameStr || '').toLowerCase()) ||
+                  (classNameStr || '').toLowerCase().includes(c.title.toLowerCase())
+              );
+              if (match) {
+                const parsed = parseInt(match.price.replace(/[^0-9]/g, ''), 10);
+                return isNaN(parsed) ? 1999 : parsed;
+              }
+              return 1999;
+            };
+
+            // Map and group bookings by month
+            const monthMap: Record<string, { info: MonthInfo; bookings: any[] }> = {};
+
+            // Ensure current month and next 2 upcoming months are always represented for early assessment
+            const now = new Date();
+            for (let offset = 0; offset <= 2; offset++) {
+              const d = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+              const mIdx = d.getMonth();
+              const yr = d.getFullYear();
+              const mKey = `${yr}-${String(mIdx + 1).padStart(2, '0')}`;
+              monthMap[mKey] = {
+                info: {
+                  key: mKey,
+                  label: `${MONTH_NAMES[mIdx]} ${yr}`,
+                  shortLabel: `${MONTH_NAMES[mIdx].slice(0, 3)} ${yr}`,
+                  year: yr,
+                  monthIndex: mIdx,
+                },
+                bookings: [],
+              };
+            }
+
+            // Populate with actual registrations
+            allRegistrations.forEach((reg) => {
+              const mInfo = parseBookingMonth(reg.preferredDate, reg.createdAt);
+              if (!monthMap[mInfo.key]) {
+                monthMap[mInfo.key] = { info: mInfo, bookings: [] };
+              }
+              monthMap[mInfo.key].bookings.push(reg);
+            });
+
+            // Sort months chronologically
+            const sortedMonthEntries = Object.entries(monthMap).sort((a, b) => a[0].localeCompare(b[0]));
+
+            // Filter bookings by selected month
+            let filteredRegistrations =
+              selectedBookingMonth === 'all'
+                ? allRegistrations
+                : (monthMap[selectedBookingMonth]?.bookings || []);
+
+            // Apply search
+            if (bookingSearch.trim()) {
+              const q = bookingSearch.toLowerCase();
+              filteredRegistrations = filteredRegistrations.filter(
+                (r) =>
+                  (r.userName || '').toLowerCase().includes(q) ||
+                  (r.userEmail || '').toLowerCase().includes(q) ||
+                  (r.className || '').toLowerCase().includes(q) ||
+                  (r.notes || '').toLowerCase().includes(q)
+              );
+            }
+
+            // Apply status filter
+            if (bookingStatusFilter !== 'all') {
+              filteredRegistrations = filteredRegistrations.filter(
+                (r) => (r.status || 'registered') === bookingStatusFilter
+              );
+            }
+
+            // Calculate assessment metrics for currently viewed month or all
+            const assessedRegistrations =
+              selectedBookingMonth === 'all'
+                ? allRegistrations
+                : (monthMap[selectedBookingMonth]?.bookings || []);
+            const regCount = assessedRegistrations.filter((r) => (r.status || 'registered') === 'registered').length;
+            const waitCount = assessedRegistrations.filter((r) => r.status === 'waitlist').length;
+            const cancelCount = assessedRegistrations.filter((r) => r.status === 'cancelled').length;
+            const projectedRevenue = assessedRegistrations
+              .filter((r) => (r.status || 'registered') === 'registered')
+              .reduce((sum, r) => sum + getPriceNum(r.className), 0);
+
+            let demandBadge = '⚪ Schedule Open';
+            let demandColor = 'bg-stone-100 text-stone-700 border-stone-200';
+            let adviceMessage = 'No reservations yet recorded for this scheduled period.';
+
+            if (regCount >= 6) {
+              demandBadge = '🔥 High Demand / Near Capacity';
+              demandColor = 'bg-amber-100 text-amber-900 border-amber-300';
+              adviceMessage =
+                'Early Assessment: High interest! This masterclass batch is nearly full. Consider opening an additional weekend session.';
+            } else if (regCount >= 3) {
+              demandBadge = '🟢 Healthy Booking Pace';
+              demandColor = 'bg-emerald-100 text-emerald-900 border-emerald-300';
+              adviceMessage =
+                'Early Assessment: Steady enrollments. Minimum class threshold reached, ready to run smoothly.';
+            } else if (regCount >= 1) {
+              demandBadge = '🟡 Early Alert: Under-Booked';
+              demandColor = 'bg-yellow-100 text-yellow-900 border-yellow-300';
+              adviceMessage =
+                'Early Assessment: Under 3 students registered. Early notice recommends promoting this batch on Instagram Stories or sending an email blast.';
+            }
+
+            // Filter Customer Orders (Inquiries)
+            let filteredInquiries = [...allInquiries];
+            if (inquiryFilter === 'unread') {
+              filteredInquiries = filteredInquiries.filter(
+                (i) => i.status !== 'read' && !i.isRead && i.status !== 'replied' && i.status !== 'closed'
+              );
+            } else if (inquiryFilter === 'read') {
+              filteredInquiries = filteredInquiries.filter(
+                (i) => i.status === 'read' || i.isRead === true
+              );
+            } else if (inquiryFilter === 'replied') {
+              filteredInquiries = filteredInquiries.filter(
+                (i) => i.status === 'replied' || i.status === 'closed'
+              );
+            }
+
+            if (inquirySearch.trim()) {
+              const q = inquirySearch.toLowerCase();
+              filteredInquiries = filteredInquiries.filter(
+                (i) =>
+                  (i.userName || '').toLowerCase().includes(q) ||
+                  (i.userEmail || '').toLowerCase().includes(q) ||
+                  (i.userPhone || '').toLowerCase().includes(q) ||
+                  (i.subject || '').toLowerCase().includes(q) ||
+                  (i.message || '').toLowerCase().includes(q)
+              );
+            }
+
+            const unreadInquiriesCount = allInquiries.filter(
+              (i) => i.status !== 'read' && !i.isRead && i.status !== 'replied' && i.status !== 'closed'
+            ).length;
+
+            return (
+              <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in pb-16">
+                {/* Header with Sub-Navigation */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#3B211B]/40 pb-5">
+                  <div>
+                    <span className="text-xs font-bold text-[#C47B55] uppercase tracking-wider flex items-center gap-1.5">
+                      <BarChart3 className="w-4 h-4 text-[#C47B55]" />
+                      Live Storefront Records & Early Demand Intelligence
+                    </span>
+                    <h3 className="font-serif text-2xl font-bold text-[#3B211B] mt-0.5">
+                      Customer Bookings & Custom Orders
+                    </h3>
+                    <p className="text-xs text-[#3B211B]/70 mt-1">
+                      Assess workshop bookings month-by-month for early capacity planning, manage registered students, and review/delete customer inquiries.
+                    </p>
+                  </div>
+
+                  {/* Top Switcher */}
+                  <div className="inline-flex p-1 bg-[#E8D6C3]/60 rounded-2xl border border-[#E8D6C3] self-start md:self-auto shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setBookingsSubTab('all')}
+                      className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                        bookingsSubTab === 'all'
+                          ? 'bg-[#3B211B] text-white shadow-xs'
+                          : 'text-[#3B211B]/70 hover:text-[#3B211B]'
+                      }`}
+                    >
+                      All Records ({allRegistrations.length + allInquiries.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBookingsSubTab('bookings')}
+                      className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                        bookingsSubTab === 'bookings'
+                          ? 'bg-[#3B211B] text-white shadow-xs'
+                          : 'text-[#3B211B]/70 hover:text-[#3B211B]'
+                      }`}
+                    >
+                      <CalendarDays className="w-3.5 h-3.5 text-[#C47B55]" />
+                      <span>Class Bookings ({allRegistrations.length})</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBookingsSubTab('inquiries')}
+                      className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                        bookingsSubTab === 'inquiries'
+                          ? 'bg-[#3B211B] text-white shadow-xs'
+                          : 'text-[#3B211B]/70 hover:text-[#3B211B]'
+                      }`}
+                    >
+                      <MessageSquare className="w-3.5 h-3.5 text-[#C47B55]" />
+                      <span>Customer Orders ({allInquiries.length})</span>
+                      {unreadInquiriesCount > 0 && (
+                        <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* ============================================================== */}
+                {/* SECTION 1: MASTERCLASS BOOKINGS & MONTHLY EARLY ASSESSMENT      */}
+                {/* ============================================================== */}
+                {(bookingsSubTab === 'all' || bookingsSubTab === 'bookings') && (
+                  <div className="space-y-6 bg-[#F8F0E5]/60 p-5 sm:p-7 rounded-3xl border border-[#E8D6C3] shadow-xs">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-[#C47B55] flex items-center gap-1.5">
+                          <TrendingUp className="w-3.5 h-3.5" />
+                          Early Assessment Module
+                        </span>
+                        <h4 className="font-serif text-xl font-bold text-[#3B211B] flex items-center gap-2">
+                          <Calendar className="w-5 h-5 text-[#C47B55]" />
+                          Monthly-Wise Customer Bookings
+                        </h4>
+                        <p className="text-xs text-[#3B211B]/70 mt-0.5">
+                          Evaluate enrollment density per month early so you can adjust baking supplies, schedule extra sessions, or promote under-booked batches in advance.
+                        </p>
+                      </div>
+
+                      {/* View Mode Toggle */}
+                      <div className="flex items-center gap-2 self-start sm:self-auto">
+                        <div className="inline-flex p-1 bg-white rounded-xl border border-[#E8D6C3] shadow-2xs text-xs">
+                          <button
+                            type="button"
+                            onClick={() => setBookingViewMode('monthly_assess')}
+                            className={`px-3 py-1 rounded-lg font-semibold transition-all cursor-pointer ${
+                              bookingViewMode === 'monthly_assess'
+                                ? 'bg-[#C47B55] text-white'
+                                : 'text-[#3B211B]/70 hover:text-[#3B211B]'
+                            }`}
+                          >
+                            Monthly Assess View
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBookingViewMode('list')}
+                            className={`px-3 py-1 rounded-lg font-semibold transition-all cursor-pointer ${
+                              bookingViewMode === 'list'
+                                ? 'bg-[#C47B55] text-white'
+                                : 'text-[#3B211B]/70 hover:text-[#3B211B]'
+                            }`}
+                          >
+                            All Bookings List
+                          </button>
+                        </div>
+
+                        {/* Test simulation button */}
+                        <button
+                          type="button"
+                          onClick={() => handleAddSampleBooking('November', 2026)}
+                          className="px-3 py-1.5 bg-white hover:bg-stone-50 border border-[#C47B55]/40 text-[#C47B55] rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs"
+                          title="Simulate a test student booking for November to preview early assessment"
+                        >
+                          + Simulate Nov Booking
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Month Filter Selector Tabs */}
+                    <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedBookingMonth('all')}
+                        className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all cursor-pointer border ${
+                          selectedBookingMonth === 'all'
+                            ? 'bg-[#3B211B] text-white border-[#3B211B] shadow-xs'
+                            : 'bg-white text-[#3B211B]/80 border-[#E8D6C3] hover:border-[#C47B55]'
+                        }`}
+                      >
+                        All Months ({allRegistrations.length})
+                      </button>
+
+                      {sortedMonthEntries.map(([mKey, mData]) => {
+                        const isSelected = selectedBookingMonth === mKey;
+                        const count = mData.bookings.length;
+                        return (
+                          <button
+                            key={mKey}
+                            type="button"
+                            onClick={() => setSelectedBookingMonth(mKey)}
+                            className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all cursor-pointer border flex items-center gap-1.5 ${
+                              isSelected
+                                ? 'bg-[#C47B55] text-white border-[#C47B55] shadow-xs'
+                                : 'bg-white text-[#3B211B]/80 border-[#E8D6C3] hover:border-[#C47B55]'
+                            }`}
+                          >
+                            <span>{mData.info.label}</span>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                                isSelected ? 'bg-white/25 text-white' : 'bg-[#E8D6C3]/60 text-[#3B211B]'
+                              }`}
+                            >
+                              {count}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Early Assessment Intelligence KPI Cards */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                      {/* Metric 1: Confirmed Seats */}
+                      <div className="bg-white p-4 rounded-2xl border border-[#E8D6C3] shadow-2xs space-y-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#3B211B]/60">
+                          Confirmed Student Seats
+                        </span>
+                        <div className="flex items-baseline justify-between">
+                          <p className="font-serif text-2xl font-bold text-[#3B211B]">{regCount}</p>
+                          <span className="text-[11px] text-[#3B211B]/60 font-mono">
+                            {selectedBookingMonth === 'all' ? 'Across all months' : 'This Month'}
+                          </span>
+                        </div>
+                        <div className="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden mt-1">
+                          <div
+                            className="bg-[#C47B55] h-full rounded-full transition-all"
+                            style={{ width: `${Math.min(100, (regCount / 10) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Metric 2: Waitlisted & Cancelled */}
+                      <div className="bg-white p-4 rounded-2xl border border-[#E8D6C3] shadow-2xs space-y-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#3B211B]/60">
+                          Waitlist & Cancellations
+                        </span>
+                        <div className="flex items-baseline justify-between">
+                          <p className="font-serif text-2xl font-bold text-[#3B211B]">
+                            {waitCount} <span className="text-xs font-normal text-amber-700">Waitlist</span>
+                          </p>
+                          <span className="text-xs text-red-600 font-semibold">{cancelCount} Cancelled</span>
+                        </div>
+                        <p className="text-[11px] text-[#3B211B]/60 mt-1">
+                          {waitCount > 0 ? 'Excess demand present for this schedule' : 'No pending overflow'}
+                        </p>
+                      </div>
+
+                      {/* Metric 3: Estimated Revenue */}
+                      <div className="bg-white p-4 rounded-2xl border border-[#E8D6C3] shadow-2xs space-y-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#3B211B]/60">
+                          Projected Class Revenue
+                        </span>
+                        <div className="flex items-baseline justify-between">
+                          <p className="font-serif text-2xl font-bold text-[#2E7D32]">
+                            {formatRupee(projectedRevenue)}
+                          </p>
+                          <span className="text-[10px] font-mono text-[#3B211B]/60">Est. Fee</span>
+                        </div>
+                        <p className="text-[11px] text-[#3B211B]/60 mt-1">
+                          Calculated from confirmed workshop enrollments
+                        </p>
+                      </div>
+
+                      {/* Metric 4: Early Demand Status */}
+                      <div className="bg-white p-4 rounded-2xl border border-[#E8D6C3] shadow-2xs flex flex-col justify-between">
+                        <div>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-[#3B211B]/60 block mb-1">
+                            Early Demand Assessment
+                          </span>
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${demandColor}`}
+                          >
+                            {demandBadge}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-[#3B211B]/75 leading-tight mt-2 line-clamp-2">
+                          {adviceMessage}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Early Assessment Strategic Recommendation Banner */}
+                    <div className="p-4 rounded-2xl bg-[#E5A962]/15 border border-[#E5A962]/40 flex items-start gap-3">
+                      <Sparkles className="w-5 h-5 text-[#C47B55] shrink-0 mt-0.5" />
+                      <div className="text-xs text-[#3B211B] space-y-0.5">
+                        <strong className="font-bold text-[#3B211B]">
+                          Baker Early Assessment Advisory for{' '}
+                          {selectedBookingMonth === 'all'
+                            ? 'All Upcoming Months'
+                            : monthMap[selectedBookingMonth]?.info.label || 'Selected Month'}
+                          :
+                        </strong>
+                        <p className="text-[#3B211B]/80 leading-relaxed">
+                          {adviceMessage} Keep class ratios to 6-8 students maximum per batch for the best hands-on fudge texture coaching.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Search & Status Filter Bar for Bookings */}
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
+                      <div className="relative flex-1 max-w-sm">
+                        <Search className="w-4 h-4 text-[#3B211B]/40 absolute left-3 top-3" />
+                        <input
+                          type="text"
+                          value={bookingSearch}
+                          onChange={(e) => setBookingSearch(e.target.value)}
+                          placeholder="Search student name, email, or class title..."
+                          className="w-full pl-9 pr-3 py-2 bg-white border border-[#E8D6C3] rounded-xl text-xs text-[#3B211B] placeholder-[#3B211B]/40 focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-[#3B211B]/70 flex items-center gap-1">
+                          <Filter className="w-3.5 h-3.5" /> Filter:
+                        </span>
+                        <select
+                          value={bookingStatusFilter}
+                          onChange={(e) => setBookingStatusFilter(e.target.value as any)}
+                          className="p-2 bg-white border border-[#E8D6C3] rounded-xl text-xs font-semibold text-[#3B211B] focus:outline-none"
+                        >
+                          <option value="all">All Statuses</option>
+                          <option value="registered">Confirmed Registered</option>
+                          <option value="waitlist">Waitlisted</option>
+                          <option value="cancelled">Cancelled</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* MONTHLY GROUPED VIEW */}
+                    {bookingViewMode === 'monthly_assess' && (
+                      <div className="space-y-5">
+                        {sortedMonthEntries
+                          .filter(
+                            ([mKey]) => selectedBookingMonth === 'all' || selectedBookingMonth === mKey
+                          )
+                          .map(([mKey, mData]) => {
+                            const monthBookings = mData.bookings.filter((b) => {
+                              if (bookingStatusFilter !== 'all' && (b.status || 'registered') !== bookingStatusFilter)
+                                return false;
+                              if (bookingSearch.trim()) {
+                                const q = bookingSearch.toLowerCase();
+                                return (
+                                  (b.userName || '').toLowerCase().includes(q) ||
+                                  (b.userEmail || '').toLowerCase().includes(q) ||
+                                  (b.className || '').toLowerCase().includes(q)
+                                );
+                              }
+                              return true;
+                            });
+
+                            return (
+                              <div
+                                key={mKey}
+                                className="bg-white rounded-2xl border border-[#E8D6C3] overflow-hidden shadow-2xs"
+                              >
+                                {/* Month Header Bar */}
+                                <div className="bg-[#3B211B] text-[#F8F0E5] px-5 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2.5">
+                                    <CalendarDays className="w-4 h-4 text-[#E5A962]" />
+                                    <h5 className="font-serif text-base font-bold text-[#F8F0E5]">
+                                      {mData.info.label} Schedule
+                                    </h5>
+                                    <span className="px-2 py-0.5 rounded-full bg-white/15 text-[#E8D6C3] text-[10px] font-mono">
+                                      {monthBookings.length} bookings
+                                    </span>
+                                  </div>
+                                  <div className="text-xs text-[#E8D6C3]/80 flex items-center gap-3">
+                                    <span>
+                                      Confirmed:{' '}
+                                      <strong className="text-white">
+                                        {monthBookings.filter((b) => (b.status || 'registered') === 'registered').length}
+                                      </strong>
+                                    </span>
+                                    <span>&bull;</span>
+                                    <span>
+                                      Est. Rev:{' '}
+                                      <strong className="text-[#E5A962]">
+                                        {formatRupee(
+                                          monthBookings
+                                            .filter((b) => (b.status || 'registered') === 'registered')
+                                            .reduce((acc, b) => acc + getPriceNum(b.className), 0)
+                                        )}
+                                      </strong>
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Bookings inside Month */}
+                                <div className="p-4 space-y-3">
+                                  {monthBookings.length === 0 ? (
+                                    <div className="py-6 text-center text-xs text-[#3B211B]/60">
+                                      No student registrations recorded for {mData.info.label} yet.
+                                    </div>
+                                  ) : (
+                                    monthBookings.map((reg) => (
+                                      <div
+                                        key={reg.id}
+                                        className="p-4 rounded-xl bg-[#F8F0E5]/50 border border-[#E8D6C3] flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#F8F0E5] transition-colors"
+                                      >
+                                        <div className="space-y-1">
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-bold text-xs text-[#3B211B]">
+                                              {reg.className}
+                                            </span>
+                                            <span className="text-[11px] font-mono px-2 py-0.2 rounded-md bg-[#C47B55]/15 text-[#C47B55] font-semibold">
+                                              {reg.preferredDate}
+                                            </span>
+                                          </div>
+                                          <p className="text-xs text-[#3B211B]/80">
+                                            Student: <strong>{reg.userName}</strong> &bull;{' '}
+                                            <a
+                                              href={`mailto:${reg.userEmail}`}
+                                              className="text-[#C47B55] hover:underline"
+                                            >
+                                              {reg.userEmail}
+                                            </a>
+                                          </p>
+                                          {reg.notes && (
+                                            <p className="text-[11px] text-[#3B211B]/70 italic bg-white p-2 rounded-lg border border-[#E8D6C3]/60">
+                                              Note: {reg.notes}
+                                            </p>
+                                          )}
+                                        </div>
+
+                                        <div className="flex items-center gap-2 shrink-0">
+                                          <select
+                                            value={reg.status || 'registered'}
+                                            onChange={async (e) => {
+                                              try {
+                                                await updateDoc(doc(db, 'class_registrations', reg.id), {
+                                                  status: e.target.value,
+                                                });
+                                                setAllRegistrations((prev) =>
+                                                  prev.map((item) =>
+                                                    item.id === reg.id ? { ...item, status: e.target.value } : item
+                                                  )
+                                                );
+                                                triggerSuccess(`Updated status to ${e.target.value}`);
+                                              } catch (err) {
+                                                console.warn(err);
+                                              }
+                                            }}
+                                            className="p-1.5 px-2 bg-white border border-[#E8D6C3] rounded-lg text-xs font-semibold text-[#3B211B]"
+                                          >
+                                            <option value="registered">registered</option>
+                                            <option value="waitlist">waitlist</option>
+                                            <option value="cancelled">cancelled</option>
+                                          </select>
+
+                                          {/* Delete Booking Facility */}
+                                          {deletingRegistrationId === reg.id ? (
+                                            <div className="flex items-center gap-1 p-1 bg-red-50 border border-red-300 rounded-lg animate-in fade-in">
+                                              <span className="text-[10px] font-bold text-red-700 px-1">
+                                                Delete?
+                                              </span>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleDeleteRegistration(reg.id, reg.userName)}
+                                                className="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-bold cursor-pointer"
+                                              >
+                                                Yes
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => setDeletingRegistrationId(null)}
+                                                className="px-1.5 py-0.5 bg-white text-[#3B211B] rounded text-[10px] border border-[#E8D6C3] cursor-pointer"
+                                              >
+                                                No
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => setDeletingRegistrationId(reg.id)}
+                                              className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg cursor-pointer transition-colors"
+                                              title="Delete booking record"
+                                            >
+                                              <Trash2 className="w-3.5 h-3.5" />
+                                            </button>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    )}
+
+                    {/* FLAT LIST VIEW */}
+                    {bookingViewMode === 'list' && (
+                      <div className="space-y-3">
+                        {filteredRegistrations.length === 0 ? (
+                          <div className="p-8 bg-white rounded-3xl text-center text-xs text-[#3B211B]/60 border border-[#E8D6C3]">
+                            No class registrations match your search filters.
+                          </div>
+                        ) : (
+                          filteredRegistrations.map((reg) => (
+                            <div
+                              key={reg.id}
+                              className="bg-white p-5 rounded-2xl border border-[#E8D6C3] flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs"
+                            >
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-bold text-[#3B211B]">{reg.className}</span>
+                                  <span className="text-xs text-[#C47B55] font-semibold">
+                                    &bull; {reg.preferredDate}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-[#3B211B]/80">
+                                  Customer: <strong>{reg.userName}</strong> ({reg.userEmail})
+                                </p>
+                                {reg.notes && (
+                                  <p className="text-xs text-[#3B211B]/60 italic">Notes: {reg.notes}</p>
+                                )}
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0">
+                                <select
+                                  value={reg.status || 'registered'}
+                                  onChange={async (e) => {
+                                    try {
+                                      await updateDoc(doc(db, 'class_registrations', reg.id), {
+                                        status: e.target.value,
+                                      });
+                                      setAllRegistrations((prev) =>
+                                        prev.map((item) =>
+                                          item.id === reg.id ? { ...item, status: e.target.value } : item
+                                        )
+                                      );
+                                      triggerSuccess(`Updated booking status to ${e.target.value}`);
+                                    } catch (err) {
+                                      console.warn(err);
+                                    }
+                                  }}
+                                  className="p-2 bg-[#F8F0E5] border border-[#E8D6C3] rounded-xl text-xs font-semibold text-[#3B211B]"
+                                >
+                                  <option value="registered">registered</option>
+                                  <option value="waitlist">waitlist</option>
+                                  <option value="cancelled">cancelled</option>
+                                </select>
+
+                                {/* Delete Facility */}
+                                {deletingRegistrationId === reg.id ? (
+                                  <div className="flex items-center gap-1.5 p-1 bg-red-50 border border-red-300 rounded-xl animate-in fade-in">
+                                    <span className="text-[11px] font-bold text-red-700 px-1">Delete?</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteRegistration(reg.id, reg.userName)}
+                                      className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[10px] font-bold cursor-pointer"
+                                    >
+                                      Yes
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setDeletingRegistrationId(null)}
+                                      className="px-2 py-1 bg-white text-[#3B211B] rounded-lg text-[10px] border border-[#E8D6C3] cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setDeletingRegistrationId(reg.id)}
+                                    className="p-2 text-red-600 hover:bg-red-50 rounded-xl cursor-pointer transition-colors"
+                                    title="Delete booking"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ============================================================== */}
+                {/* SECTION 2: CUSTOM ORDER INQUIRIES (DELETE & MARK AS READ)      */}
+                {/* ============================================================== */}
+                {(bookingsSubTab === 'all' || bookingsSubTab === 'inquiries') && (
+                  <div className="space-y-5 bg-[#F8F0E5]/60 p-5 sm:p-7 rounded-3xl border border-[#E8D6C3] shadow-xs">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-[#C47B55] flex items-center gap-1.5">
+                          <MessageSquare className="w-3.5 h-3.5" />
+                          Custom Orders Management
+                        </span>
+                        <h4 className="font-serif text-xl font-bold text-[#3B211B]">
+                          Customer Orders & Bespoke Inquiries ({allInquiries.length})
+                        </h4>
+                        <p className="text-xs text-[#3B211B]/70 mt-0.5">
+                          Manage custom orders, review requested brownie flavors, mark items as read or replied, chat with customers on WhatsApp, and permanently delete fulfilled/test records.
+                        </p>
+                      </div>
+
+                      {/* Header Actions */}
+                      <div className="flex items-center gap-2 self-start sm:self-auto">
+                        {unreadInquiriesCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleMarkAllInquiriesAsRead}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-stone-50 border border-[#C47B55] text-[#C47B55] text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                          >
+                            <CheckCheck className="w-3.5 h-3.5" />
+                            <span>Mark All Read ({unreadInquiriesCount})</span>
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={handleAddSampleInquiry}
+                          className="px-3 py-1.5 bg-[#3B211B] hover:bg-[#23120E] text-[#F8F0E5] rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                        >
+                          + Simulate Order
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Filter Tabs & Search Bar */}
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+                      {/* Status Tabs */}
+                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+                        <button
+                          type="button"
+                          onClick={() => setInquiryFilter('all')}
+                          className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer border ${
+                            inquiryFilter === 'all'
+                              ? 'bg-[#3B211B] text-white border-[#3B211B]'
+                              : 'bg-white text-[#3B211B]/70 border-[#E8D6C3] hover:border-[#C47B55]'
+                          }`}
+                        >
+                          All Orders ({allInquiries.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setInquiryFilter('unread')}
+                          className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer border flex items-center gap-1.5 ${
+                            inquiryFilter === 'unread'
+                              ? 'bg-amber-600 text-white border-amber-600'
+                              : 'bg-white text-[#3B211B]/70 border-[#E8D6C3] hover:border-amber-400'
+                          }`}
+                        >
+                          {unreadInquiriesCount > 0 && (
+                            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                          )}
+                          <span>Unread ({unreadInquiriesCount})</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setInquiryFilter('read')}
+                          className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer border ${
+                            inquiryFilter === 'read'
+                              ? 'bg-[#C47B55] text-white border-[#C47B55]'
+                              : 'bg-white text-[#3B211B]/70 border-[#E8D6C3] hover:border-[#C47B55]'
+                          }`}
+                        >
+                          Read ({allInquiries.filter((i) => i.status === 'read' || i.isRead).length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setInquiryFilter('replied')}
+                          className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer border ${
+                            inquiryFilter === 'replied'
+                              ? 'bg-blue-700 text-white border-blue-700'
+                              : 'bg-white text-[#3B211B]/70 border-[#E8D6C3] hover:border-blue-400'
+                          }`}
+                        >
+                          Replied / Closed
+                        </button>
+                      </div>
+
+                      {/* Search */}
+                      <div className="relative flex-1 max-w-sm">
+                        <Search className="w-4 h-4 text-[#3B211B]/40 absolute left-3 top-3" />
+                        <input
+                          type="text"
+                          value={inquirySearch}
+                          onChange={(e) => setInquirySearch(e.target.value)}
+                          placeholder="Search order subject, customer, or phone..."
+                          className="w-full pl-9 pr-3 py-2 bg-white border border-[#E8D6C3] rounded-xl text-xs text-[#3B211B] placeholder-[#3B211B]/40 focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Customer Order Cards List */}
+                    {filteredInquiries.length === 0 ? (
+                      <div className="p-10 bg-white rounded-3xl text-center text-xs text-[#3B211B]/60 border border-[#E8D6C3] space-y-2">
+                        <MessageSquare className="w-8 h-8 text-[#C47B55]/40 mx-auto" />
+                        <p className="font-semibold text-sm text-[#3B211B]">No Customer Orders Found</p>
+                        <p className="text-xs text-[#3B211B]/60 max-w-sm mx-auto">
+                          {allInquiries.length === 0
+                            ? 'No customer inquiries recorded yet. When users submit custom orders from the website, they will appear here.'
+                            : 'No customer orders match your selected search or filter.'}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-3.5">
+                        {filteredInquiries.map((inq) => {
+                          const isRead = inq.status === 'read' || inq.isRead === true;
+                          const isReplied = inq.status === 'replied';
+                          const isClosed = inq.status === 'closed';
+
+                          // Extract phone number from field or message
+                          const extractedPhone =
+                            inq.userPhone ||
+                            inq.message?.match(/Phone:\s*([^\n\r]+)/)?.[1]?.trim() ||
+                            '';
+
+                          return (
+                            <div
+                              key={inq.id}
+                              className={`p-5 rounded-2xl border transition-all shadow-2xs space-y-3 ${
+                                !isRead && !isReplied && !isClosed
+                                  ? 'bg-amber-50/40 border-amber-300 ring-1 ring-amber-200'
+                                  : 'bg-white border-[#E8D6C3]'
+                              }`}
+                            >
+                              {/* Order Header */}
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E8D6C3]/60 pb-3">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {/* Read / Unread Status Badge */}
+                                  {!isRead && !isReplied && !isClosed ? (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500 text-white text-[10px] font-bold uppercase tracking-wider shadow-2xs">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                                      New / Unread
+                                    </span>
+                                  ) : isReplied ? (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 text-[10px] font-bold uppercase tracking-wider">
+                                      <Check className="w-3 h-3" /> Replied
+                                    </span>
+                                  ) : isClosed ? (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-stone-200 text-stone-700 text-[10px] font-bold uppercase tracking-wider">
+                                      Closed
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-stone-100 text-[#3B211B]/70 text-[10px] font-semibold uppercase tracking-wider">
+                                      <Check className="w-3 h-3 text-[#C47B55]" /> Read
+                                    </span>
+                                  )}
+
+                                  <span className="text-xs font-bold text-[#3B211B]">{inq.subject}</span>
+                                </div>
+
+                                <div className="text-[11px] text-[#3B211B]/60 font-mono">
+                                  {inq.createdAt
+                                    ? new Date(inq.createdAt).toLocaleString('en-US', {
+                                        month: 'short',
+                                        day: 'numeric',
+                                        year: 'numeric',
+                                        hour: 'numeric',
+                                        minute: 'numeric',
+                                      })
+                                    : 'Recent'}
+                                </div>
+                              </div>
+
+                              {/* Order Message Details */}
+                              <div className="bg-[#F8F0E5]/60 p-3.5 rounded-xl border border-[#E8D6C3]/60 text-xs text-[#3B211B]/90 font-mono whitespace-pre-wrap leading-relaxed">
+                                {inq.message}
+                              </div>
+
+                              {/* Customer Profile & Actions Footer */}
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                                <div className="text-xs text-[#3B211B]/80 flex flex-wrap items-center gap-x-3 gap-y-1">
+                                  <span>
+                                    Customer: <strong>{inq.userName || 'Anonymous'}</strong>
+                                  </span>
+                                  <span>&bull;</span>
+                                  <a
+                                    href={`mailto:${inq.userEmail}`}
+                                    className="text-[#C47B55] hover:underline"
+                                  >
+                                    {inq.userEmail}
+                                  </a>
+                                  {extractedPhone && (
+                                    <>
+                                      <span>&bull;</span>
+                                      <span className="font-mono text-[#3B211B]">
+                                        Tel: {extractedPhone}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+
+                                {/* Action Buttons: Mark as Read, Contact, Delete */}
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {/* WhatsApp Quick Reply */}
+                                  {extractedPhone && (
+                                    <a
+                                      href={`https://wa.me/91${extractedPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`Hello ${inq.userName || 'there'}, thank you for contacting BrowineGirlCakes regarding your order inquiry!`)}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#25D366] hover:bg-[#20ba59] text-white text-[11px] font-bold transition-all shadow-2xs"
+                                      title="Reply directly to customer on WhatsApp"
+                                    >
+                                      <MessageCircle className="w-3 h-3 text-white" />
+                                      <span>WhatsApp</span>
+                                    </a>
+                                  )}
+
+                                  {/* Mark as Read / Unread Toggle */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleInquiryRead(inq)}
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer ${
+                                      isRead
+                                        ? 'bg-white hover:bg-stone-50 border-[#E8D6C3] text-[#3B211B]/80'
+                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 shadow-2xs font-bold'
+                                    }`}
+                                    title={isRead ? 'Mark as Unread' : 'Mark as Read'}
+                                  >
+                                    {isRead ? (
+                                      <>
+                                        <EyeOff className="w-3 h-3 text-[#3B211B]/60" />
+                                        <span>Mark Unread</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Check className="w-3 h-3 text-white" />
+                                        <span>Mark as Read</span>
+                                      </>
+                                    )}
+                                  </button>
+
+                                  {/* Status Selector */}
+                                  <select
+                                    value={inq.status || (isRead ? 'read' : 'new')}
+                                    onChange={(e) => handleUpdateInquiryStatus(inq.id, e.target.value)}
+                                    className="p-1 px-2 bg-[#F8F0E5] border border-[#E8D6C3] rounded-lg text-xs font-semibold text-[#3B211B]"
+                                  >
+                                    <option value="new">new</option>
+                                    <option value="read">read</option>
+                                    <option value="replied">replied</option>
+                                    <option value="closed">closed</option>
+                                  </select>
+
+                                  {/* Delete Facility with Inline Confirmation */}
+                                  {deletingInquiryId === inq.id ? (
+                                    <div className="flex items-center gap-1.5 p-1 bg-red-50 border border-red-300 rounded-lg animate-in fade-in shadow-2xs">
+                                      <span className="text-[10px] font-bold text-red-700 px-1">
+                                        Delete order?
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteInquiry(inq.id, inq.userName)}
+                                        className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-bold cursor-pointer transition-colors"
+                                      >
+                                        Yes, Delete
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeletingInquiryId(null)}
+                                        className="px-2 py-1 bg-white hover:bg-stone-100 text-[#3B211B] rounded text-[10px] font-semibold border border-[#E8D6C3] cursor-pointer transition-colors"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setDeletingInquiryId(inq.id)}
+                                      className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg cursor-pointer transition-colors"
+                                      title="Delete customer order"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* TAB 7: CUSTOM SHOWCASE (10 BROWNIES) */}
+          {activeTab === 'custom' && (
+            <div className="max-w-5xl mx-auto space-y-6 animate-in fade-in">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <span className="text-xs font-bold text-[#C47B55] uppercase tracking-wider flex items-center gap-1.5">
+                    <Gift className="w-4 h-4 text-[#C47B55]" />
+                    Custom Order Showcase ({customBrownies.length} Brownies)
+                  </span>
+                  <h3 className="font-serif text-2xl font-bold text-[#3B211B] mt-0.5">
+                    Custom Brownie Showcase Management
+                  </h3>
+                  <p className="text-xs text-[#3B211B]/70 mt-1">
+                    Manage the 10 featured artisan brownies displayed on the dedicated Custom Orders page. Easily upload photos directly from your device, edit descriptions, origin stories, and cocoa percentages.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsAddingCustomBrownie(true)}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#3B211B] hover:bg-[#23120E] text-[#F8F0E5] text-xs font-bold transition-all shadow-md cursor-pointer self-start sm:self-auto"
+                >
+                  <Plus className="w-4 h-4 text-[#E5A962]" />
+                  <span>+ Add Custom Brownie</span>
+                </button>
+              </div>
+
+              {/* Add New Custom Brownie Form */}
+              {isAddingCustomBrownie && (
+                <div className="p-6 bg-white rounded-3xl border-2 border-[#C47B55] shadow-lg space-y-4 animate-in fade-in">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-serif text-lg font-bold text-[#3B211B] flex items-center gap-2">
+                      <Gift className="w-4 h-4 text-[#C47B55]" />
+                      Add New Custom Showcase Brownie
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingCustomBrownie(false)}
+                      className="text-xs text-[#3B211B]/60 hover:text-black font-semibold cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="sm:col-span-2 space-y-3">
+                      <div>
+                        <label className="text-xs font-bold text-[#3B211B] block mb-1">Brownie Name *</label>
+                        <input
+                          type="text"
+                          value={newCustomBrownie.name}
+                          onChange={(e) => setNewCustomBrownie({ ...newCustomBrownie, name: e.target.value })}
+                          placeholder="e.g. Signature Gold Flake Ganache Brownie"
+                          className="w-full p-2.5 bg-[#F8F0E5]/50 border border-[#E8D6C3] rounded-xl text-xs text-[#3B211B] font-semibold"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-bold text-[#3B211B] block mb-1">Origin / Subtitle</label>
+                          <input
+                            type="text"
+                            value={newCustomBrownie.subtitle}
+                            onChange={(e) => setNewCustomBrownie({ ...newCustomBrownie, subtitle: e.target.value })}
+                            placeholder="e.g. 74% Belgian Dark & Fleur de Sel"
+                            className="w-full p-2.5 bg-[#F8F0E5]/50 border border-[#E8D6C3] rounded-xl text-xs text-[#3B211B]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-[#3B211B] block mb-1">Cocoa Percentage</label>
+                          <input
+                            type="text"
+                            value={newCustomBrownie.cocoaPercentage}
+                            onChange={(e) => setNewCustomBrownie({ ...newCustomBrownie, cocoaPercentage: e.target.value })}
+                            placeholder="e.g. 74% Dark"
+                            className="w-full p-2.5 bg-[#F8F0E5]/50 border border-[#E8D6C3] rounded-xl text-xs text-[#3B211B]"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-bold text-[#3B211B] block mb-1">Description & Tasting Notes *</label>
+                        <textarea
+                          rows={3}
+                          value={newCustomBrownie.description}
+                          onChange={(e) => setNewCustomBrownie({ ...newCustomBrownie, description: e.target.value })}
+                          placeholder="Rich slow-baked brownie folded with couverture ganache, crisp crinkly crust, and molten center..."
+                          className="w-full p-2.5 bg-[#F8F0E5]/50 border border-[#E8D6C3] rounded-xl text-xs text-[#3B211B]"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Image Upload Area */}
+                    <div className="space-y-3 flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-bold text-[#3B211B]">Photo *</label>
+                          <LocalImageUploader
+                            label="Upload from Device"
+                            onImageSelected={(dataUrl) => {
+                              setNewCustomBrownie({ ...newCustomBrownie, image: dataUrl });
+                              triggerSuccess('Loaded local photo from device!');
+                            }}
+                          />
+                        </div>
+
+                        <div className="h-36 rounded-2xl overflow-hidden bg-black/10 border border-[#E8D6C3] mb-2">
+                          <img
+                            src={newCustomBrownie.image}
+                            alt="Preview"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+
+                        <input
+                          type="text"
+                          value={newCustomBrownie.image}
+                          onChange={(e) => setNewCustomBrownie({ ...newCustomBrownie, image: e.target.value })}
+                          placeholder="Paste image URL or use device upload"
+                          className="w-full p-2 bg-[#F8F0E5]/50 border border-[#E8D6C3] rounded-lg text-[11px] font-mono"
+                        />
+                      </div>
+
+                      <div className="flex justify-end gap-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsAddingCustomBrownie(false)}
+                          className="px-4 py-2 text-xs font-semibold text-[#3B211B] cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!newCustomBrownie.name.trim()) {
+                              alert('Please provide a name for the custom brownie.');
+                              return;
+                            }
+                            await addCustomBrownie(newCustomBrownie);
+                            setIsAddingCustomBrownie(false);
+                            setNewCustomBrownie({
+                              name: '',
+                              subtitle: '',
+                              description: '',
+                              price: '',
+                              image: 'https://images.unsplash.com/photo-1606313564200-e75d5e30476c?q=85&w=800&auto=format&fit=crop',
+                              badge: 'Artisan Custom',
+                              cocoaPercentage: '70% Dark',
+                              flavorNotes: ['Single Origin Cocoa'],
+                            });
+                            triggerSuccess(`Added custom brownie "${newCustomBrownie.name}"!`);
+                          }}
+                          className="px-5 py-2.5 rounded-full bg-[#C47B55] hover:bg-[#D98B5F] text-white text-xs font-bold shadow-md cursor-pointer transition-colors"
+                        >
+                          Save Custom Brownie
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Custom Brownies Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {customBrownies.map((brownie, bIdx) => {
+                  const isExpanded = expandedCustomBrownieId === brownie.id;
+
+                  return (
+                    <div
+                      key={brownie.id}
+                      className="bg-white p-5 rounded-3xl border border-[#E8D6C3] shadow-sm space-y-4 hover:border-[#C47B55]/50 transition-all"
+                    >
+                      {/* Photo and Header */}
+                      <div className="flex gap-4 items-start">
+                        <div className="relative group shrink-0">
+                          <div className="w-24 h-24 rounded-2xl overflow-hidden bg-black/10 border border-[#E8D6C3]">
+                            <img
+                              src={brownie.image}
+                              alt={brownie.name}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                          <span className="absolute -top-1.5 -left-1.5 w-6 h-6 rounded-full bg-[#3B211B] text-[#E5A962] font-mono text-[11px] font-bold flex items-center justify-center shadow-xs">
+                            {bIdx + 1}
+                          </span>
+                        </div>
+
+                        <div className="flex-1 min-w-0 space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-[#C47B55] bg-[#F8F0E5] px-2 py-0.5 rounded-md">
+                              {brownie.cocoaPercentage || 'Artisan Cocoa'}
+                            </span>
+                            <LocalImageUploader
+                              label="Upload Photo"
+                              onImageSelected={async (dataUrl) => {
+                                await updateCustomBrownie(brownie.id, { image: dataUrl });
+                                triggerSuccess(`Updated photo for "${brownie.name}" directly from device!`);
+                              }}
+                            />
+                          </div>
+
+                          <input
+                            type="text"
+                            value={brownie.name}
+                            onChange={(e) => updateCustomBrownie(brownie.id, { name: e.target.value })}
+                            className="w-full p-2 bg-[#F8F0E5]/50 border border-[#E8D6C3] rounded-xl text-sm font-bold text-[#3B211B]"
+                            placeholder="Brownie Name"
+                          />
+
+                          <input
+                            type="text"
+                            value={brownie.subtitle}
+                            onChange={(e) => updateCustomBrownie(brownie.id, { subtitle: e.target.value })}
+                            className="w-full p-1.5 bg-[#F8F0E5]/30 border border-[#E8D6C3] rounded-lg text-xs text-[#3B211B]/80"
+                            placeholder="Subtitle / Origin"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Description */}
+                      <div>
+                        <label className="text-[10px] font-bold uppercase text-[#3B211B]/70 block mb-1">
+                          Description (Shown in Morphing Dialog Modal)
+                        </label>
+                        <textarea
+                          rows={3}
+                          value={brownie.description}
+                          onChange={(e) => updateCustomBrownie(brownie.id, { description: e.target.value })}
+                          className="w-full p-2.5 bg-[#F8F0E5]/40 border border-[#E8D6C3] rounded-xl text-xs text-[#3B211B] leading-relaxed"
+                        />
+                      </div>
+
+                      {/* Optional Expandable Details */}
+                      {isExpanded && (
+                        <div className="p-3 bg-[#F8F0E5]/60 rounded-xl space-y-2 text-xs border border-[#E8D6C3] animate-in fade-in">
+                          <div>
+                            <label className="text-[10px] font-bold text-[#3B211B] block">Direct Image URL</label>
+                            <input
+                              type="text"
+                              value={brownie.image}
+                              onChange={(e) => updateCustomBrownie(brownie.id, { image: e.target.value })}
+                              className="w-full p-1.5 bg-white border border-[#E8D6C3] rounded-md text-[11px] font-mono text-[#3B211B]"
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-[10px] font-bold text-[#3B211B] block">Cocoa %</label>
+                              <input
+                                type="text"
+                                value={brownie.cocoaPercentage}
+                                onChange={(e) => updateCustomBrownie(brownie.id, { cocoaPercentage: e.target.value })}
+                                className="w-full p-1.5 bg-white border border-[#E8D6C3] rounded-md text-xs font-semibold"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold text-[#3B211B] block">Badge Label</label>
+                              <input
+                                type="text"
+                                value={brownie.badge || ''}
+                                onChange={(e) => updateCustomBrownie(brownie.id, { badge: e.target.value })}
+                                className="w-full p-1.5 bg-white border border-[#E8D6C3] rounded-md text-xs"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Action buttons */}
+                      <div className="flex items-center justify-between pt-1 border-t border-[#E8D6C3]/50">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedCustomBrownieId(isExpanded ? null : brownie.id)}
+                          className="text-xs text-[#C47B55] hover:underline flex items-center gap-1 font-semibold cursor-pointer"
+                        >
+                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          <span>{isExpanded ? 'Hide Image URL' : 'Edit Image URL & Badge'}</span>
+                        </button>
+
+                        {deletingCustomId === brownie.id ? (
+                          <div className="flex items-center gap-1.5 p-1 bg-red-50 border border-red-300 rounded-xl animate-in fade-in">
+                            <span className="text-[10px] font-bold text-red-700 px-1">Remove item?</span>
+                            <button
+                              type="button"
+                              onClick={async (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                await deleteCustomBrownie(brownie.id);
+                                setDeletingCustomId(null);
+                                triggerSuccess(`Removed "${brownie.name}"`);
+                              }}
+                              className="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded-md text-[10px] font-bold cursor-pointer"
+                            >
+                              Yes
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setDeletingCustomId(null);
+                              }}
+                              className="px-2 py-0.5 bg-white text-[#3B211B] rounded-md text-[10px] font-semibold cursor-pointer border border-[#E8D6C3]"
+                            >
+                              No
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setDeletingCustomId(brownie.id);
+                            }}
+                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg text-xs flex items-center gap-1 cursor-pointer font-semibold transition-colors"
+                            title="Remove custom brownie"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 8: ADMIN TEAM, PASSWORD & ROLE ACCESS */}
+          {activeTab === 'admins' && (
+            <div className="max-w-5xl mx-auto space-y-8 animate-in fade-in pb-12">
               <div>
                 <span className="text-xs font-bold text-[#C47B55] uppercase tracking-wider">
-                  Real-Time Database Records
+                  Security, Password &amp; Team Permissions
                 </span>
-                <h3 className="font-serif text-2xl font-bold text-[#3B211B] mt-0.5">
-                  Live Class Bookings & Customer Inquiries
+                <h3 className="font-serif text-2xl sm:text-3xl font-bold text-[#3B211B] mt-0.5">
+                  Admin Password &amp; Team Access Management
                 </h3>
-                <p className="text-xs text-[#3B211B]/70 mt-1">
-                  Submissions made by customers on the public website stream here directly via Google Firestore.
+                <p className="text-xs sm:text-sm text-[#3B211B]/70 mt-1">
+                  Configure a strong admin login password and manage who has administrative access to the BROWNIEGIRLCAKES console. Only exact matching passwords are accepted at login.
                 </p>
               </div>
 
-              {/* Class Registrations */}
-              <div className="space-y-3">
-                <h4 className="font-bold text-sm text-[#3B211B] flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-[#C47B55]" />
-                  Masterclass Registrations ({allRegistrations.length})
-                </h4>
-
-                {allRegistrations.length === 0 ? (
-                  <div className="p-8 bg-white rounded-3xl text-center text-xs text-[#3B211B]/60 border border-[#E8D6C3]">
-                    No class bookings recorded yet.
+              {/* 1. Set Strong Admin Master Password Card */}
+              <div className="bg-white p-5 sm:p-8 rounded-3xl border border-[#E8D6C3] shadow-sm space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E8D6C3] pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-[#3B211B] text-[#E5A962] flex items-center justify-center shrink-0">
+                      <KeyRound className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-serif text-lg font-bold text-[#3B211B]">
+                        Set Strong Admin Master Password
+                      </h4>
+                      <p className="text-xs text-[#3B211B]/60">
+                        Replace the login password with your own strong password. Any random or wrong password will be blocked.
+                      </p>
+                    </div>
                   </div>
-                ) : (
-                  <div className="space-y-3">
-                    {allRegistrations.map((reg) => (
-                      <div
-                        key={reg.id}
-                        className="bg-white p-5 rounded-2xl border border-[#E8D6C3] flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm"
-                      >
-                        <div>
-                          <p className="text-sm font-bold text-[#3B211B]">
-                            {reg.className} &bull; <span className="text-[#C47B55]">{reg.preferredDate}</span>
-                          </p>
-                          <p className="text-xs text-[#3B211B]/80 mt-1">
-                            Customer: <strong>{reg.userName}</strong> ({reg.userEmail})
-                          </p>
-                          {reg.notes && (
-                            <p className="text-xs text-[#3B211B]/60 italic mt-1">
-                              Notes: {reg.notes}
-                            </p>
-                          )}
-                        </div>
 
-                        <div className="flex items-center gap-2">
-                          <label className="text-[10px] font-bold text-[#3B211B]/60 uppercase">
-                            Status:
-                          </label>
-                          <select
-                            value={reg.status}
-                            onChange={async (e) => {
-                              try {
-                                await updateDoc(doc(db, 'class_registrations', reg.id), {
-                                  status: e.target.value,
-                                });
-                                triggerSuccess(`Updated booking status to ${e.target.value}`);
-                              } catch (err) {
-                                console.warn(err);
-                              }
-                            }}
-                            className="p-2 bg-[#F8F0E5] border border-[#E8D6C3] rounded-xl text-xs font-semibold text-[#3B211B]"
-                          >
-                            <option value="registered">registered</option>
-                            <option value="waitlist">waitlist</option>
-                            <option value="cancelled">cancelled</option>
-                          </select>
-                        </div>
-                      </div>
-                    ))}
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold self-start sm:self-center ${
+                      adminPassword === DEFAULT_ADMIN_PASSWORD
+                        ? 'bg-amber-100 text-amber-900'
+                        : 'bg-emerald-100 text-emerald-800'
+                    }`}
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    {adminPassword === DEFAULT_ADMIN_PASSWORD
+                      ? 'Using Default Password (admin123)'
+                      : 'Custom Strong Password Active'}
+                  </span>
+                </div>
+
+                {pwdError && (
+                  <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs font-medium flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                    <span>{pwdError}</span>
                   </div>
                 )}
+
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    setPwdError(null);
+
+                    if (!currentPwdInput) {
+                      setPwdError('Please enter your current admin password.');
+                      return;
+                    }
+                    if (newPwdInput.length < 6) {
+                      setPwdError('New password must be at least 6 characters long.');
+                      return;
+                    }
+                    if (newPwdInput !== confirmPwdInput) {
+                      setPwdError('New password and confirmation password do not match.');
+                      return;
+                    }
+
+                    const res = await updateAdminPassword(currentPwdInput, newPwdInput);
+                    if (!res.success) {
+                      setPwdError(res.message);
+                    } else {
+                      setCurrentPwdInput('');
+                      setNewPwdInput('');
+                      setConfirmPwdInput('');
+                      triggerSuccess(res.message);
+                    }
+                  }}
+                  className="space-y-5"
+                >
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {/* Current Password */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-bold uppercase tracking-wider text-[#3B211B]">
+                          Current Password *
+                        </label>
+                        {adminPassword === DEFAULT_ADMIN_PASSWORD && (
+                          <button
+                            type="button"
+                            onClick={() => setCurrentPwdInput(DEFAULT_ADMIN_PASSWORD)}
+                            className="text-[10px] font-bold text-[#C47B55] hover:underline cursor-pointer"
+                          >
+                            Fill Default (admin123)
+                          </button>
+                        )}
+                      </div>
+                      <div className="relative">
+                        <input
+                          type={showCurrentPwd ? 'text' : 'password'}
+                          value={currentPwdInput}
+                          onChange={(e) => {
+                            setCurrentPwdInput(e.target.value);
+                            setPwdError(null);
+                          }}
+                          placeholder="Enter current password"
+                          required
+                          className="w-full min-h-[44px] p-3 pr-10 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs sm:text-sm font-medium text-[#3B211B] focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowCurrentPwd(!showCurrentPwd)}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#3B211B]/50 hover:text-[#3B211B] cursor-pointer"
+                          tabIndex={-1}
+                        >
+                          {showCurrentPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* New Strong Password */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-bold uppercase tracking-wider text-[#3B211B]">
+                          New Strong Password *
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const generated = `Brownie#${Math.floor(1000 + Math.random() * 9000)}!`;
+                            setNewPwdInput(generated);
+                            setConfirmPwdInput(generated);
+                            setShowNewPwd(true);
+                            setPwdError(null);
+                          }}
+                          className="text-[10px] font-bold text-[#C47B55] hover:underline cursor-pointer"
+                        >
+                          Generate Strong
+                        </button>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type={showNewPwd ? 'text' : 'password'}
+                          value={newPwdInput}
+                          onChange={(e) => {
+                            setNewPwdInput(e.target.value);
+                            setPwdError(null);
+                          }}
+                          placeholder="e.g. Preethi@Brownie2026"
+                          required
+                          className="w-full min-h-[44px] p-3 pr-10 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs sm:text-sm font-medium text-[#3B211B] focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowNewPwd(!showNewPwd)}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#3B211B]/50 hover:text-[#3B211B] cursor-pointer"
+                          tabIndex={-1}
+                        >
+                          {showNewPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Confirm New Password */}
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-[#3B211B] mb-1.5">
+                        Confirm New Password *
+                      </label>
+                      <input
+                        type={showNewPwd ? 'text' : 'password'}
+                        value={confirmPwdInput}
+                        onChange={(e) => {
+                          setConfirmPwdInput(e.target.value);
+                          setPwdError(null);
+                        }}
+                        placeholder="Re-enter new password"
+                        required
+                        className="w-full min-h-[44px] p-3 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs sm:text-sm font-medium text-[#3B211B] focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Live Password Strength Checklist */}
+                  <div className="p-3.5 rounded-2xl bg-[#F8F0E5]/70 border border-[#E8D6C3] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-3 text-[11px] font-medium">
+                      <span className="font-bold text-[#3B211B] uppercase tracking-wider text-[10px]">
+                        Strength Checks:
+                      </span>
+                      <span
+                        className={`flex items-center gap-1 ${
+                          newPwdInput.length >= 8 ? 'text-emerald-700 font-bold' : 'text-[#3B211B]/50'
+                        }`}
+                      >
+                        <Check className="w-3.5 h-3.5" /> 8+ Characters
+                      </span>
+                      <span
+                        className={`flex items-center gap-1 ${
+                          /[A-Z]/.test(newPwdInput) && /[a-z]/.test(newPwdInput)
+                            ? 'text-emerald-700 font-bold'
+                            : 'text-[#3B211B]/50'
+                        }`}
+                      >
+                        <Check className="w-3.5 h-3.5" /> Upper &amp; Lowercase
+                      </span>
+                      <span
+                        className={`flex items-center gap-1 ${
+                          /[0-9]/.test(newPwdInput) ? 'text-emerald-700 font-bold' : 'text-[#3B211B]/50'
+                        }`}
+                      >
+                        <Check className="w-3.5 h-3.5" /> Number
+                      </span>
+                      <span
+                        className={`flex items-center gap-1 ${
+                          /[^A-Za-z0-9]/.test(newPwdInput)
+                            ? 'text-emerald-700 font-bold'
+                            : 'text-[#3B211B]/50'
+                        }`}
+                      >
+                        <Check className="w-3.5 h-3.5" /> Symbol (@#$!)
+                      </span>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="px-6 py-2.5 rounded-xl bg-[#3B211B] hover:bg-[#23120E] text-[#F8F0E5] text-xs sm:text-sm font-bold shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 shrink-0 min-h-[42px]"
+                    >
+                      <Save className="w-4 h-4 text-[#E5A962]" />
+                      <span>Save Strong Password</span>
+                    </button>
+                  </div>
+                </form>
               </div>
 
-              {/* Inquiries */}
-              <div className="space-y-3 pt-4 border-t border-[#E8D6C3]">
-                <h4 className="font-bold text-sm text-[#3B211B] flex items-center gap-2">
-                  <MessageSquare className="w-4 h-4 text-[#C47B55]" />
-                  Custom Order & Catering Inquiries ({allInquiries.length})
-                </h4>
-
-                {allInquiries.length === 0 ? (
-                  <div className="p-8 bg-white rounded-3xl text-center text-xs text-[#3B211B]/60 border border-[#E8D6C3]">
-                    No inquiries recorded yet.
+              {/* 2. Add Another Person to Admin Access Form */}
+              <div className="bg-white p-5 sm:p-8 rounded-3xl border border-[#E8D6C3] shadow-sm space-y-5">
+                <div className="flex items-center justify-between border-b border-[#E8D6C3] pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-[#3B211B] text-[#E5A962] flex items-center justify-center shrink-0">
+                      <Plus className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-serif text-lg font-bold text-[#3B211B]">
+                        Add Another Person for Admin Access
+                      </h4>
+                      <p className="text-xs text-[#3B211B]/60">
+                        Enter their email address, role, and optional personal password to grant dashboard access
+                      </p>
+                    </div>
                   </div>
-                ) : (
-                  <div className="space-y-3">
-                    {allInquiries.map((inq) => (
-                      <div
-                        key={inq.id}
-                        className="bg-white p-5 rounded-2xl border border-[#E8D6C3] space-y-2 shadow-sm"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-[#3B211B]">{inq.subject}</span>
-                          <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full bg-[#E8D6C3] text-[#3B211B]">
-                            {inq.status}
-                          </span>
-                        </div>
-                        <p className="text-xs text-[#3B211B]/80 font-mono bg-[#F8F0E5]/60 p-3 rounded-xl whitespace-pre-wrap">
-                          {inq.message}
-                        </p>
-                        <p className="text-[11px] text-[#3B211B]/60">
-                          From: {inq.userName} ({inq.userEmail}) &bull;{' '}
-                          {inq.createdAt ? new Date(inq.createdAt).toLocaleDateString() : 'Recent'}
-                        </p>
-                      </div>
-                    ))}
+                  <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-bold">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    Instant Live Sync
+                  </span>
+                </div>
+
+                {adminFormError && (
+                  <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs font-medium flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                    <span>{adminFormError}</span>
                   </div>
                 )}
+
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    setAdminFormError(null);
+                    const result = await addAdminUser({
+                      email: newAdminEmail,
+                      name: newAdminName,
+                      role: newAdminRole,
+                      addedBy: adminEmail,
+                      customPassword: newAdminCustomPassword,
+                    });
+                    if (!result.success) {
+                      setAdminFormError(result.message);
+                    } else {
+                      setNewAdminEmail('');
+                      setNewAdminName('');
+                      setNewAdminCustomPassword('');
+                      setNewAdminRole('co-admin');
+                      triggerSuccess(result.message);
+                    }
+                  }}
+                  className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-4 items-end"
+                >
+                  <div className="lg:col-span-3">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-[#3B211B] mb-1.5">
+                      Person&apos;s Full Name
+                    </label>
+                    <input
+                      type="text"
+                      value={newAdminName}
+                      onChange={(e) => setNewAdminName(e.target.value)}
+                      placeholder="e.g. Preethi / Studio Manager"
+                      className="w-full min-h-[44px] p-3 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs sm:text-sm font-medium text-[#3B211B] focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
+                    />
+                  </div>
+
+                  <div className="lg:col-span-3">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-[#3B211B] mb-1.5">
+                      Email Address (Gmail / Official) *
+                    </label>
+                    <input
+                      type="email"
+                      value={newAdminEmail}
+                      onChange={(e) => {
+                        setNewAdminEmail(e.target.value);
+                        setAdminFormError(null);
+                      }}
+                      placeholder="colleague@gmail.com"
+                      required
+                      className="w-full min-h-[44px] p-3 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs sm:text-sm font-medium text-[#3B211B] focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
+                    />
+                  </div>
+
+                  <div className="lg:col-span-2">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-[#3B211B] mb-1.5">
+                      Personal Password
+                    </label>
+                    <input
+                      type="text"
+                      value={newAdminCustomPassword}
+                      onChange={(e) => setNewAdminCustomPassword(e.target.value)}
+                      placeholder="Optional (or uses Master)"
+                      className="w-full min-h-[44px] p-3 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs sm:text-sm font-medium text-[#3B211B] focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
+                    />
+                  </div>
+
+                  <div className="lg:col-span-2">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-[#3B211B] mb-1.5">
+                      Access Role
+                    </label>
+                    <select
+                      value={newAdminRole}
+                      onChange={(e) => setNewAdminRole(e.target.value as 'co-admin' | 'manager')}
+                      className="w-full min-h-[44px] p-3 bg-[#F8F0E5]/60 border border-[#E8D6C3] rounded-xl text-xs sm:text-sm font-semibold text-[#3B211B] focus:outline-none focus:ring-2 focus:ring-[#C47B55]"
+                    >
+                      <option value="co-admin">Co-Admin (Full)</option>
+                      <option value="manager">Manager</option>
+                    </select>
+                  </div>
+
+                  <div className="sm:col-span-2 lg:col-span-2">
+                    <button
+                      type="submit"
+                      className="w-full min-h-[44px] py-3 px-4 rounded-xl bg-[#C47B55] hover:bg-[#D98B5F] text-white text-xs sm:text-sm font-bold shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Add Admin</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              {/* 3. Active Administrators List */}
+              <div className="bg-white p-5 sm:p-8 rounded-3xl border border-[#E8D6C3] shadow-sm space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E8D6C3] pb-4">
+                  <div>
+                    <h4 className="font-serif text-lg font-bold text-[#3B211B]">
+                      Authorized Administrators ({adminList.length})
+                    </h4>
+                    <p className="text-xs text-[#3B211B]/60">
+                      All accounts listed below have verified access to this administration console
+                    </p>
+                  </div>
+                  <div className="text-xs text-[#3B211B]/70 font-medium">
+                    Official Bakery Mail: <strong className="text-[#C47B55]">preethipreethu712@gmail.com</strong>
+                  </div>
+                </div>
+
+                <div className="divide-y divide-[#E8D6C3]">
+                  {adminList.map((adm) => {
+                    const isCurrentSession = adm.email.toLowerCase() === adminEmail.toLowerCase();
+                    const isPrimaryOwner =
+                      adm.isPrimary ||
+                      adm.email.toLowerCase() === 'preethipreethu712@gmail.com' ||
+                      adm.email.toLowerCase() === 'vigneshsivan2001@gmail.com';
+
+                    return (
+                      <div
+                        key={adm.email}
+                        className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                      >
+                        <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+                          <div
+                            className={`w-11 h-11 rounded-2xl flex items-center justify-center font-serif font-bold text-base shrink-0 ${
+                              isPrimaryOwner
+                                ? 'bg-[#3B211B] text-[#E5A962]'
+                                : 'bg-[#C47B55]/15 text-[#C47B55]'
+                            }`}
+                          >
+                            {(adm.name || adm.email).charAt(0).toUpperCase()}
+                          </div>
+
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-bold text-sm text-[#3B211B]">{adm.name}</span>
+                              <span
+                                className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full ${
+                                  adm.role === 'owner'
+                                    ? 'bg-[#3B211B] text-[#E5A962]'
+                                    : adm.role === 'co-admin'
+                                    ? 'bg-[#C47B55]/15 text-[#C47B55]'
+                                    : 'bg-blue-100 text-blue-800'
+                                }`}
+                              >
+                                {adm.role === 'owner'
+                                  ? 'Primary Owner / Admin'
+                                  : adm.role === 'co-admin'
+                                  ? 'Co-Admin'
+                                  : 'Bakery Manager'}
+                              </span>
+                              {adm.email.toLowerCase() === 'preethipreethu712@gmail.com' && (
+                                <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                                  Official Bakery Mail
+                                </span>
+                              )}
+                              {isCurrentSession && (
+                                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-900">
+                                  You (Active)
+                                </span>
+                              )}
+                            </div>
+
+                            <p className="text-xs font-mono font-semibold text-[#3B211B]/80 break-all">
+                              {adm.email}
+                            </p>
+
+                            <p className="text-[11px] text-[#3B211B]/50">
+                              Added by {adm.addedBy || 'System'} &bull;{' '}
+                              {new Date(adm.addedAt).toLocaleDateString('en-US', {
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric',
+                              })}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                          {isPrimaryOwner ? (
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F8F0E5] text-[#3B211B]/60 text-xs font-semibold border border-[#E8D6C3]">
+                              <ShieldCheck className="w-3.5 h-3.5 text-[#C47B55]" />
+                              <span>Permanent Access</span>
+                            </span>
+                          ) : revokingAdminEmail === adm.email ? (
+                            <div className="flex items-center gap-1.5 p-1.5 bg-red-50 border border-red-300 rounded-xl animate-in fade-in">
+                              <span className="text-[11px] font-bold text-red-800 px-1.5">
+                                Revoke access?
+                              </span>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const res = await removeAdminUser(adm.email);
+                                  setRevokingAdminEmail(null);
+                                  if (res.success) {
+                                    triggerSuccess(res.message);
+                                  } else {
+                                    setAdminFormError(res.message);
+                                  }
+                                }}
+                                className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                              >
+                                Yes, Remove
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setRevokingAdminEmail(null)}
+                                className="px-2.5 py-1 bg-white text-[#3B211B] border border-[#E8D6C3] rounded-lg text-xs font-semibold cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setRevokingAdminEmail(adm.email)}
+                              className="px-3 py-1.5 rounded-xl text-red-600 hover:bg-red-50 border border-red-200 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Revoke Access</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}

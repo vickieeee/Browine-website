@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useContent } from '../context/ContentContext';
-import { X, Send, CheckCircle2, AlertCircle, MessageSquare, Phone, Clock } from 'lucide-react';
+import { X, Send, CheckCircle2, AlertCircle, MessageSquare, Phone, Clock, MessageCircle } from 'lucide-react';
 
 interface ContactModalProps {
   isOpen: boolean;
@@ -57,20 +57,20 @@ export const ContactModal: React.FC<ContactModalProps> = ({ isOpen, onClose }) =
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs animate-in fade-in">
-      <div className="relative w-full max-w-lg bg-[#F8F0E5] rounded-3xl shadow-2xl border border-[#C47B55]/30 overflow-hidden max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/65 backdrop-blur-xs animate-in fade-in">
+      <div className="relative w-full max-w-lg bg-[#F8F0E5] rounded-t-3xl sm:rounded-3xl shadow-2xl border border-[#C47B55]/30 overflow-hidden max-h-[92vh] sm:max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="bg-[#3B211B] text-[#F8F0E5] p-6 flex items-center justify-between">
+        <div className="bg-[#3B211B] text-[#F8F0E5] p-5 sm:p-6 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <MessageSquare className="w-5 h-5 text-[#E5A962]" />
+            <MessageSquare className="w-5 h-5 text-[#E5A962] shrink-0" />
             <div>
-              <h3 className="font-serif text-xl font-bold">Get in Touch with BrowineGirlCakes</h3>
+              <h3 className="font-editorial text-lg sm:text-xl font-bold tracking-tight">Get in Touch with BrowineGirlCakes</h3>
               <p className="text-xs text-[#E8D6C3]/80">Custom batches, wedding favors & studio inquiries</p>
             </div>
           </div>
           <button
             onClick={handleClose}
-            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-[#F8F0E5] flex items-center justify-center transition-colors cursor-pointer"
+            className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-[#F8F0E5] flex items-center justify-center transition-colors cursor-pointer shrink-0"
             aria-label="Close modal"
           >
             <X className="w-5 h-5" />
@@ -78,22 +78,47 @@ export const ContactModal: React.FC<ContactModalProps> = ({ isOpen, onClose }) =
         </div>
 
         {/* Content */}
-        <div className="p-6 overflow-y-auto space-y-6">
+        <div className="p-5 sm:p-6 overflow-y-auto space-y-4">
+          {/* Prominent Direct WhatsApp Callout */}
+          <div className="p-3.5 rounded-2xl bg-white border border-[#25D366]/40 shadow-xs flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-[#25D366]/15 text-[#25D366] flex items-center justify-center shrink-0">
+                <MessageCircle className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-[#25D366]">
+                  Instant WhatsApp Inquiry
+                </p>
+                <p className="font-mono text-xs font-bold text-[#3B211B]">
+                  +91 {settings.whatsappNumber || '7339651529'}
+                </p>
+              </div>
+            </div>
+            <a
+              href={`https://wa.me/91${(settings.whatsappNumber || '7339651529').replace(/[^0-9]/g, '')}?text=${encodeURIComponent('Hello BrowineGirlCakes! I would like to inquire about an order.')}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3.5 py-1.5 rounded-full bg-[#25D366] hover:bg-[#20ba59] text-white text-xs font-semibold shrink-0 transition-colors"
+            >
+              Chat on WhatsApp
+            </a>
+          </div>
+
           {/* Prominent Direct Phone Hotline Callout */}
-          <div className="p-4 rounded-2xl bg-white border border-[#C47B55]/30 shadow-xs flex items-center justify-between gap-3">
+          <div className="p-3.5 rounded-2xl bg-white border border-[#C47B55]/30 shadow-xs flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-[#C47B55]/15 text-[#C47B55] flex items-center justify-center shrink-0">
                 <Phone className="w-5 h-5" />
               </div>
               <div>
-                <p className="text-[11px] font-bold uppercase tracking-wider text-[#C47B55]">
-                  Bakery & Orders Hotline
+                <p className="text-[10px] font-bold uppercase tracking-wider text-[#C47B55]">
+                  Bakery Phone Hotline
                 </p>
                 <a
                   href={`tel:${settings.phoneRaw}`}
-                  className="font-serif text-base font-bold text-[#3B211B] hover:text-[#C47B55] transition-colors"
+                  className="font-serif text-sm font-bold text-[#3B211B] hover:text-[#C47B55] transition-colors"
                 >
-                  {settings.phone} <span className="text-xs font-normal text-[#3B211B]/60">/ {settings.phoneRaw}</span>
+                  {settings.phone} <span className="text-[11px] font-normal text-[#3B211B]/60">/ {settings.phoneRaw}</span>
                 </a>
               </div>
             </div>

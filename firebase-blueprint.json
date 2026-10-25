@@ -114,6 +114,32 @@
         "award3Title": { "type": "string", "maxLength": 150 },
         "award3Org": { "type": "string", "maxLength": 150 }
       }
+    },
+    "Order": {
+      "title": "Brownie Delivery Order",
+      "description": "Artisan brownie delivery order and live status tracker",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string", "maxLength": 50 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "customerName": { "type": "string", "maxLength": 100 },
+        "customerEmail": { "type": "string", "maxLength": 120 },
+        "customerPhone": { "type": "string", "maxLength": 50 },
+        "items": { "type": "array" },
+        "totalAmount": { "type": "string", "maxLength": 30 },
+        "status": {
+          "type": "string",
+          "enum": ["received", "baking", "finishing", "out_for_delivery", "delivered", "cancelled"]
+        },
+        "statusMessage": { "type": "string", "maxLength": 300 },
+        "estimatedDelivery": { "type": "string", "maxLength": 100 },
+        "deliveryAddress": { "type": "string", "maxLength": 200 },
+        "driverName": { "type": "string", "maxLength": 100 },
+        "driverPhone": { "type": "string", "maxLength": 50 },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["orderId", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -140,6 +166,10 @@
     "/baking_classes/{classId}": {
       "schema": "BakingClass",
       "description": "Baking masterclasses and schedule times"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Customer brownie orders and live delivery tracking state"
     }
   }
 }

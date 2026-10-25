@@ -1,17 +1,22 @@
 import React from 'react';
-import { Cake, Heart, Instagram, Facebook, Mail, MapPin, Phone } from 'lucide-react';
+import { Cake, Heart, Instagram, MessageCircle, Mail, Phone } from 'lucide-react';
 import { useContent } from '../context/ContentContext';
+import { getInstagramUrl } from '../utils/formatters';
 
 interface FooterProps {
   onOpenCreations: () => void;
   onOpenClasses: () => void;
   onOpenContact: () => void;
+  onOpenCustomOrders?: () => void;
+  onOpenMyActivity?: () => void;
 }
 
 export const Footer: React.FC<FooterProps> = ({
   onOpenCreations,
   onOpenClasses,
   onOpenContact,
+  onOpenCustomOrders,
+  onOpenMyActivity,
 }) => {
   const { settings } = useContent();
 
@@ -25,7 +30,7 @@ export const Footer: React.FC<FooterProps> = ({
               <div className="w-10 h-10 rounded-full bg-[#C47B55] flex items-center justify-center text-white shadow-md">
                 <Cake className="w-5 h-5 text-[#F8F0E5]" />
               </div>
-              <span className="font-serif text-2xl font-bold tracking-tight text-[#F8F0E5]">
+              <span className="font-brand text-2xl font-bold tracking-wider text-[#F8F0E5]">
                 BrowineGirlCakes
               </span>
             </div>
@@ -34,24 +39,24 @@ export const Footer: React.FC<FooterProps> = ({
             </p>
             <div className="flex items-center gap-3 pt-2 text-[#C47B55]">
               <a
-                href={`https://instagram.com/${settings.instagramId}`}
+                href={getInstagramUrl(settings.instagramId)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="w-8 h-8 rounded-full bg-[#3B211B] flex items-center justify-center hover:bg-[#C47B55] hover:text-white transition-colors"
-                aria-label={`Instagram @${settings.instagramId}`}
-                title={`@${settings.instagramId}`}
+                aria-label="Official Instagram @browniegirlcakes"
+                title="Follow @browniegirlcakes on Instagram"
               >
                 <Instagram className="w-4 h-4" />
               </a>
               <a
-                href={`https://facebook.com/${settings.facebookId}`}
+                href={`https://wa.me/91${(settings.whatsappNumber || '7339651529').replace(/[^0-9]/g, '')}?text=${encodeURIComponent('Hello BrowineGirlCakes! I would like to inquire about a custom order.')}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-8 h-8 rounded-full bg-[#3B211B] flex items-center justify-center hover:bg-[#C47B55] hover:text-white transition-colors"
-                aria-label={`Facebook ${settings.facebookId}`}
-                title={settings.facebookId}
+                className="w-8 h-8 rounded-full bg-[#3B211B] flex items-center justify-center hover:bg-[#25D366] hover:text-white transition-colors"
+                aria-label="WhatsApp Inquiry"
+                title={`WhatsApp Inquiry: ${settings.whatsappNumber || '7339651529'}`}
               >
-                <Facebook className="w-4 h-4" />
+                <MessageCircle className="w-4 h-4 text-[#25D366]" />
               </a>
               <a
                 href={`mailto:${settings.email}`}
@@ -66,7 +71,7 @@ export const Footer: React.FC<FooterProps> = ({
 
           {/* Quick Links */}
           <div>
-            <h4 className="font-serif text-base font-bold text-[#F8F0E5] mb-4">
+            <h4 className="font-footer text-sm font-semibold tracking-wider uppercase text-[#F8F0E5] mb-4">
               Explore
             </h4>
             <ul className="space-y-2.5 text-xs text-[#E8D6C3]/80">
@@ -86,7 +91,7 @@ export const Footer: React.FC<FooterProps> = ({
                 </a>
               </li>
               <li>
-                <button onClick={onOpenContact} className="hover:text-[#C47B55] transition-colors cursor-pointer">
+                <button onClick={onOpenCustomOrders || onOpenContact} className="hover:text-[#C47B55] text-[#E5A962] font-semibold transition-colors cursor-pointer">
                   Custom Orders & Catering
                 </button>
               </li>
@@ -95,7 +100,7 @@ export const Footer: React.FC<FooterProps> = ({
 
           {/* Studio Hours */}
           <div>
-            <h4 className="font-serif text-base font-bold text-[#F8F0E5] mb-4">
+            <h4 className="font-footer text-sm font-semibold tracking-wider uppercase text-[#F8F0E5] mb-4">
               Studio & Bakery Hours
             </h4>
             <div className="space-y-2 text-xs text-[#E8D6C3]/80">
@@ -106,16 +111,23 @@ export const Footer: React.FC<FooterProps> = ({
             </div>
           </div>
 
-          {/* Location & Contact */}
+          {/* Contact & Inquiries */}
           <div>
-            <h4 className="font-serif text-base font-bold text-[#F8F0E5] mb-4">
-              Visit Our Kitchen
+            <h4 className="font-footer text-sm font-semibold tracking-wider uppercase text-[#F8F0E5] mb-4">
+              Direct Contact & Orders
             </h4>
             <div className="space-y-3 text-xs text-[#E8D6C3]/80">
-              <p className="flex items-start gap-2">
-                <MapPin className="w-4 h-4 text-[#C47B55] shrink-0 mt-0.5" />
-                <span>428 Cocoa Haven Lane, Suite 104, Artisan Baking District</span>
-              </p>
+              <div className="flex items-center gap-2">
+                <MessageCircle className="w-4 h-4 text-[#25D366] shrink-0" />
+                <a
+                  href={`https://wa.me/91${(settings.whatsappNumber || '7339651529').replace(/[^0-9]/g, '')}?text=${encodeURIComponent('Hello BrowineGirlCakes! I would like to inquire about a custom order.')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-[#25D366] transition-colors"
+                >
+                  WhatsApp: +91 {settings.whatsappNumber || '7339651529'}
+                </a>
+              </div>
               <div className="flex items-center gap-2">
                 <Phone className="w-4 h-4 text-[#C47B55] shrink-0" />
                 <a

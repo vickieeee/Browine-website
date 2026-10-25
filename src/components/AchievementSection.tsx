@@ -67,7 +67,7 @@ export const AchievementSection: React.FC<AchievementSectionProps> = ({
             <Trophy className="w-3.5 h-3.5 text-[#C47B55]" />
             Our Sweet Milestones & Achievements
           </div>
-          <h2 className="font-serif text-3xl sm:text-4xl lg:text-5xl font-bold text-[#3B211B] tracking-tight">
+          <h2 className="font-stats text-3xl sm:text-4xl lg:text-5xl font-bold text-[#3B211B] tracking-tight">
             Recognized for Passion, Perfected for You
           </h2>
           <p className="mt-4 text-base sm:text-lg text-[#3B211B]/80 leading-relaxed">
@@ -88,7 +88,7 @@ export const AchievementSection: React.FC<AchievementSectionProps> = ({
                   <div className="w-12 h-12 rounded-2xl bg-[#F8F0E5] border border-[#C47B55]/30 text-[#C47B55] flex items-center justify-center mb-5 group-hover:bg-[#3B211B] group-hover:text-[#F8F0E5] transition-colors">
                     <Icon className="w-6 h-6" />
                   </div>
-                  <span className="font-serif text-3xl sm:text-4xl font-extrabold text-[#3B211B] tracking-tight block">
+                  <span className="font-stats text-3xl sm:text-4xl font-extrabold text-[#3B211B] tracking-tight block">
                     {stat.value}
                   </span>
                   <h3 className="font-bold text-sm sm:text-base text-[#C47B55] mt-1">
@@ -119,7 +119,7 @@ export const AchievementSection: React.FC<AchievementSectionProps> = ({
                     {award.organization}
                   </span>
                 </div>
-                <h4 className="font-serif text-lg font-bold text-[#F8F0E5]">
+                <h4 className="font-editorial text-xl font-bold text-[#F8F0E5]">
                   {award.title}
                 </h4>
                 <p className="text-xs text-[#E8D6C3]/80 flex items-center gap-1.5">

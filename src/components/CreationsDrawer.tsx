@@ -3,6 +3,7 @@ import { SIGNATURE_BROWNIES, BrownieItem } from '../data/brownies';
 import { X, Heart, Star, Sparkles, Check, ShoppingBag } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useContent } from '../context/ContentContext';
+import { formatRupee } from '../utils/formatters';
 
 interface CreationsDrawerProps {
   isOpen: boolean;
@@ -10,6 +11,7 @@ interface CreationsDrawerProps {
   selectedBrownie?: BrownieItem | null;
   onSelectBrownie: (brownie: BrownieItem) => void;
   onOrderNow: () => void;
+  onOpenCustomOrders?: () => void;
 }
 
 export const CreationsDrawer: React.FC<CreationsDrawerProps> = ({
@@ -18,6 +20,7 @@ export const CreationsDrawer: React.FC<CreationsDrawerProps> = ({
   selectedBrownie,
   onSelectBrownie,
   onOrderNow,
+  onOpenCustomOrders,
 }) => {
   const { userProfile, toggleFavorite, user, signInWithGoogle } = useAuth();
   const { menuItems } = useContent();
@@ -44,7 +47,7 @@ export const CreationsDrawer: React.FC<CreationsDrawerProps> = ({
           <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-[#E5A962]" />
             <div>
-              <h3 className="font-serif text-xl font-bold">Artisan Brownie Creations</h3>
+              <h3 className="font-gallery text-xl font-bold tracking-tight">Artisan Brownie Creations</h3>
               <p className="text-xs text-[#E8D6C3]/80">Slow-baked in small batches daily</p>
             </div>
           </div>
@@ -82,12 +85,12 @@ export const CreationsDrawer: React.FC<CreationsDrawerProps> = ({
                   <span className="text-xs font-semibold text-[#E5A962] tracking-wider uppercase">
                     {activeBrownie.cocoaPercentage}
                   </span>
-                  <h4 className="font-serif text-2xl font-bold text-white drop-shadow-xs">
+                  <h4 className="font-gallery text-2xl font-bold text-white drop-shadow-xs">
                     {activeBrownie.name}
                   </h4>
                 </div>
-                <span className="text-lg font-bold text-white bg-[#C47B55] px-3 py-1 rounded-full shadow-xs">
-                  {activeBrownie.price}
+                <span className="text-xs font-semibold text-white bg-[#C47B55] px-3.5 py-1 rounded-full shadow-xs tracking-wide">
+                  Small-Batch
                 </span>
               </div>
             </div>
@@ -118,20 +121,24 @@ export const CreationsDrawer: React.FC<CreationsDrawerProps> = ({
                 <button
                   onClick={() => {
                     onClose();
-                    onOrderNow();
+                    if (onOpenCustomOrders) {
+                      onOpenCustomOrders();
+                    } else {
+                      onOrderNow();
+                    }
                   }}
                   className="flex-1 py-3 rounded-full bg-[#C47B55] hover:bg-[#D98B5F] text-[#F8F0E5] font-semibold text-sm tracking-wide shadow-md transition-colors flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  <ShoppingBag className="w-4 h-4" />
-                  Order Batch Box
+                  <Sparkles className="w-4 h-4 text-[#E5A962]" />
+                  Inquire for Custom Order
                 </button>
               </div>
             </div>
           </div>
 
-          {/* Quick Selector of all 5 */}
+          {/* Quick Selector */}
           <div>
-            <h4 className="font-serif text-lg font-bold text-[#3B211B] mb-3">
+            <h4 className="font-gallery text-lg font-bold text-[#3B211B] mb-3">
               Browse Other Flavors
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -152,7 +159,7 @@ export const CreationsDrawer: React.FC<CreationsDrawerProps> = ({
                   />
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-bold text-[#3B211B] truncate">{b.name}</p>
-                    <p className="text-[11px] text-[#C47B55] font-semibold">{b.price}</p>
+                    <p className="text-[11px] text-[#C47B55] font-medium">{b.cocoaPercentage}</p>
                   </div>
                 </div>
               ))}

@@ -9,13 +9,15 @@ import {
 import { db } from '../firebase';
 import { useAuth } from './AuthContext';
 import { SIGNATURE_BROWNIES, BAKING_CLASSES, BrownieItem, BakingClassInfo } from '../data/brownies';
+import { formatRupee, OFFICIAL_INSTAGRAM_URL } from '../utils/formatters';
 
 export interface SiteSettings {
   phone: string;
   phoneRaw: string;
+  whatsappNumber: string;
   email: string;
   instagramId: string;
-  facebookId: string;
+  facebookId?: string;
   aboutImage: string;
   heroSlide1Image: string;
   heroSlide2Image: string;
@@ -47,12 +49,48 @@ export interface AchievementSettings {
   award3Note: string;
 }
 
+export interface AdminUserRecord {
+  email: string;
+  name: string;
+  role: 'owner' | 'co-admin' | 'manager';
+  addedAt: string;
+  addedBy: string;
+  isPrimary?: boolean;
+  customPassword?: string;
+}
+
+export const DEFAULT_ADMIN_PASSWORD = 'admin123';
+
+export const PRIMARY_ADMIN_EMAILS: string[] = [
+  'preethipreethu712@gmail.com',
+  'vigneshsivan2001@gmail.com',
+];
+
+export const DEFAULT_ADMIN_LIST: AdminUserRecord[] = [
+  {
+    email: 'preethipreethu712@gmail.com',
+    name: 'Official Bakery Admin',
+    role: 'owner',
+    addedAt: '2025-01-01T00:00:00.000Z',
+    addedBy: 'System / Master',
+    isPrimary: true,
+  },
+  {
+    email: 'vigneshsivan2001@gmail.com',
+    name: 'Vignesh Sivan (Founder)',
+    role: 'owner',
+    addedAt: '2025-01-01T00:00:00.000Z',
+    addedBy: 'System / Master',
+    isPrimary: true,
+  },
+];
+
 export const DEFAULT_SETTINGS: SiteSettings = {
   phone: '(555) 392-CAKE',
   phoneRaw: '+15553922253',
-  email: 'hello@browinegirlcakes.com',
-  instagramId: 'browinegirlcakes',
-  facebookId: 'browinegirlcakes',
+  whatsappNumber: '7339651529',
+  email: 'preethipreethu712@gmail.com',
+  instagramId: OFFICIAL_INSTAGRAM_URL,
   aboutImage: 'https://images.unsplash.com/photo-1556911073-38141963c9e0?q=85&w=1600&auto=format&fit=crop',
   heroSlide1Image: 'https://images.unsplash.com/photo-1556911073-38141963c9e0?q=85&w=2400&auto=format&fit=crop',
   heroSlide2Image: 'https://images.unsplash.com/photo-1606313564200-e75d5e30476c?q=85&w=2400&auto=format&fit=crop',
@@ -88,6 +126,18 @@ const STORAGE_KEYS = {
   ACHIEVEMENTS: 'browinegirl_achievements',
   MENU: 'browinegirl_menu_items',
   CLASSES: 'browinegirl_classes',
+  DELETED_CLASSES: 'browinegirl_deleted_classes',
+  CUSTOM: 'browinegirl_custom_items',
+  ADMINS: 'browinegirl_admin_team',
+  ADMIN_PASSWORD: 'browinegirl_admin_password',
+};
+
+const getDeletedClassIds = (): string[] => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.DELETED_CLASSES);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return [];
 };
 
 interface ContentContextType {
@@ -95,6 +145,9 @@ interface ContentContextType {
   achievements: AchievementSettings;
   menuItems: BrownieItem[];
   bakingClasses: BakingClassInfo[];
+  customBrownies: BrownieItem[];
+  adminList: AdminUserRecord[];
+  adminEmails: string[];
   isAdmin: boolean;
   isDemoAdmin: boolean;
   toggleDemoAdmin: () => void;
@@ -106,6 +159,14 @@ interface ContentContextType {
   addClass: (cls: Omit<BakingClassInfo, 'id'>) => Promise<void>;
   updateClass: (id: string, cls: Partial<BakingClassInfo>) => Promise<void>;
   deleteClass: (id: string) => Promise<void>;
+  addCustomBrownie: (item: Omit<BrownieItem, 'id'>) => Promise<void>;
+  updateCustomBrownie: (id: string, item: Partial<BrownieItem>) => Promise<void>;
+  deleteCustomBrownie: (id: string) => Promise<void>;
+  adminPassword: string;
+  updateAdminPassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; message: string }>;
+  verifyAdminCredentials: (email: string, password: string) => { valid: boolean; message: string };
+  addAdminUser: (newAdmin: { email: string; name: string; role: 'co-admin' | 'manager'; addedBy?: string; customPassword?: string }) => Promise<{ success: boolean; message: string }>;
+  removeAdminUser: (email: string) => Promise<{ success: boolean; message: string }>;
   resetToDefaults: () => Promise<void>;
 }
 
@@ -118,7 +179,17 @@ export const ContentProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [settings, setSettings] = useState<SiteSettings>(() => {
     try {
       const cached = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-      if (cached) return { ...DEFAULT_SETTINGS, ...JSON.parse(cached) };
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (
+          !parsed.email ||
+          parsed.email === 'hello@browniegirlcakes.com' ||
+          parsed.email === 'admin@browinegirlcakes.com'
+        ) {
+          parsed.email = 'preethipreethu712@gmail.com';
+        }
+        return { ...DEFAULT_SETTINGS, ...parsed };
+      }
     } catch (e) {
       console.warn('Could not read cached settings', e);
     }
@@ -140,7 +211,12 @@ export const ContentProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const cached = localStorage.getItem(STORAGE_KEYS.MENU);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((item: BrownieItem) => ({
+            ...item,
+            price: formatRupee(item.price),
+          }));
+        }
       }
     } catch (e) {
       console.warn('Could not read cached menu items', e);
@@ -149,23 +225,80 @@ export const ContentProvider: React.FC<{ children: React.ReactNode }> = ({ child
   });
 
   const [bakingClasses, setBakingClasses] = useState<BakingClassInfo[]>(() => {
+    const deletedIds = getDeletedClassIds();
     try {
       const cached = localStorage.getItem(STORAGE_KEYS.CLASSES);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed
+            .filter((c: BakingClassInfo) => !deletedIds.includes(c.id))
+            .map((c: BakingClassInfo) => ({
+              ...c,
+              price: formatRupee(c.price),
+              dates: Array.isArray(c.dates) && c.dates.length > 0
+                ? c.dates
+                : (BAKING_CLASSES.find((b) => b.id === c.id)?.dates || ['Saturday @ 10:00 AM (In-Studio)', 'Sunday @ 2:00 PM (Live Online)']),
+            }));
+        }
       }
     } catch (e) {
       console.warn('Could not read cached classes', e);
     }
-    return BAKING_CLASSES;
+    return BAKING_CLASSES.filter((c) => !deletedIds.includes(c.id));
+  });
+
+  const [customBrownies, setCustomBrownies] = useState<BrownieItem[]>(() => {
+    try {
+      const cached = localStorage.getItem(STORAGE_KEYS.CUSTOM);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not read cached custom items', e);
+    }
+    return SIGNATURE_BROWNIES;
+  });
+
+  const [adminList, setAdminList] = useState<AdminUserRecord[]>(() => {
+    try {
+      const cached = localStorage.getItem(STORAGE_KEYS.ADMINS);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return DEFAULT_ADMIN_LIST;
+  });
+
+  const [adminEmails, setAdminEmails] = useState<string[]>(() => {
+    return Array.from(
+      new Set([
+        ...PRIMARY_ADMIN_EMAILS.map((e) => e.toLowerCase()),
+        ...adminList.map((a) => a.email.toLowerCase()),
+      ])
+    );
+  });
+
+  const [adminPassword, setAdminPassword] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.ADMIN_PASSWORD);
+      if (saved && saved.trim().length > 0) return saved;
+    } catch {}
+    return DEFAULT_ADMIN_PASSWORD;
   });
 
   const [isDemoAdmin, setIsDemoAdmin] = useState<boolean>(true); // Accessible in applet environment
 
-  const isSuperAdminEmail = user?.email === 'vigneshsivan2001@gmail.com';
+  const userEmailLower = user?.email?.toLowerCase().trim() || '';
+  const isAuthorizedAdminEmail =
+    PRIMARY_ADMIN_EMAILS.some((e) => e.toLowerCase() === userEmailLower) ||
+    adminEmails.some((e) => e.toLowerCase() === userEmailLower);
   const isAdminRole = userProfile?.role === 'admin';
-  const isAdmin = isSuperAdminEmail || isAdminRole || isDemoAdmin;
+  const isAdmin = isAuthorizedAdminEmail || isAdminRole || isDemoAdmin;
 
   // 1. Sync Settings from Firestore
   useEffect(() => {
@@ -174,7 +307,16 @@ export const ContentProvider: React.FC<{ children: React.ReactNode }> = ({ child
       settingsDocRef,
       (docSnap) => {
         if (docSnap.exists()) {
-          const remoteData = { ...DEFAULT_SETTINGS, ...docSnap.data() } as SiteSettings;
+          const raw = docSnap.data();
+          if (
+            !raw.email ||
+            raw.email === 'hello@browniegirlcakes.com' ||
+            raw.email === 'admin@browinegirlcakes.com'
+          ) {
+            raw.email = 'preethipreethu712@gmail.com';
+            setDoc(settingsDocRef, { email: 'preethipreethu712@gmail.com' }, { merge: true }).catch(() => {});
+          }
+          const remoteData = { ...DEFAULT_SETTINGS, ...raw } as SiteSettings;
           setSettings(remoteData);
           try {
             localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(remoteData));
@@ -220,7 +362,12 @@ export const ContentProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (!snapshot.empty) {
           const items: BrownieItem[] = [];
           snapshot.forEach((d) => {
-            items.push({ id: d.id, ...d.data() } as BrownieItem);
+            const raw = d.data() as BrownieItem;
+            items.push({
+              ...raw,
+              id: d.id || raw.id,
+              price: formatRupee(raw.price),
+            });
           });
           setMenuItems(items);
           try {
@@ -242,19 +389,125 @@ export const ContentProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const unsubscribe = onSnapshot(
       classesColRef,
       (snapshot) => {
+        const deletedIds = getDeletedClassIds();
         if (!snapshot.empty) {
           const clsList: BakingClassInfo[] = [];
           snapshot.forEach((d) => {
-            clsList.push({ id: d.id, ...d.data() } as BakingClassInfo);
+            const raw = d.data() as BakingClassInfo;
+            const classId = d.id || raw.id;
+            if (!deletedIds.includes(classId)) {
+              clsList.push({
+                ...raw,
+                id: classId,
+                price: formatRupee(raw.price),
+                dates: Array.isArray(raw.dates) && raw.dates.length > 0
+                  ? raw.dates
+                  : (BAKING_CLASSES.find((b) => b.id === classId)?.dates || ['Saturday @ 10:00 AM (In-Studio)', 'Sunday @ 2:00 PM (Live Online)']),
+              });
+            }
           });
           setBakingClasses(clsList);
           try {
             localStorage.setItem(STORAGE_KEYS.CLASSES, JSON.stringify(clsList));
           } catch {}
+        } else {
+          // Snapshot is empty: No classes in database
+          setBakingClasses([]);
+          try {
+            localStorage.setItem(STORAGE_KEYS.CLASSES, JSON.stringify([]));
+          } catch {}
         }
       },
       (error) => {
         console.warn('Classes snapshot fallback:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // 5. Sync Custom Showcase Brownies from Firestore
+  useEffect(() => {
+    const customColRef = collection(db, 'custom_items');
+    const unsubscribe = onSnapshot(
+      customColRef,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const items: BrownieItem[] = [];
+          snapshot.forEach((d) => {
+            const raw = d.data() as BrownieItem;
+            items.push({
+              ...raw,
+              id: d.id || raw.id,
+            });
+          });
+          setCustomBrownies(items);
+          try {
+            localStorage.setItem(STORAGE_KEYS.CUSTOM, JSON.stringify(items));
+          } catch {}
+        }
+      },
+      (error) => {
+        console.warn('Custom items snapshot fallback:', error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // 6. Sync Admin Team & Authorization from Firestore
+  useEffect(() => {
+    const adminDocRef = doc(db, 'settings', 'admins');
+    const unsubscribe = onSnapshot(
+      adminDocRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const list =
+            Array.isArray(data?.adminList) && data.adminList.length > 0
+              ? data.adminList
+              : DEFAULT_ADMIN_LIST;
+          const emails =
+            Array.isArray(data?.adminEmails) && data.adminEmails.length > 0
+              ? data.adminEmails
+              : PRIMARY_ADMIN_EMAILS;
+
+          // Always guarantee that official owners are preserved in authorized list
+          const mergedEmails = Array.from(
+            new Set([
+              ...PRIMARY_ADMIN_EMAILS.map((e) => e.toLowerCase()),
+              ...emails.map((e: string) => e.toLowerCase()),
+              ...list.map((a: AdminUserRecord) => a.email.toLowerCase()),
+            ])
+          );
+
+          setAdminList(list);
+          setAdminEmails(mergedEmails);
+          if (typeof data?.masterPassword === 'string' && data.masterPassword.trim().length > 0) {
+            setAdminPassword(data.masterPassword);
+            try {
+              localStorage.setItem(STORAGE_KEYS.ADMIN_PASSWORD, data.masterPassword);
+            } catch {}
+          }
+          try {
+            localStorage.setItem(STORAGE_KEYS.ADMINS, JSON.stringify(list));
+          } catch {}
+        } else {
+          // Initialize default admin list in Firestore if not present
+          setDoc(
+            adminDocRef,
+            {
+              adminList: DEFAULT_ADMIN_LIST,
+              adminEmails: PRIMARY_ADMIN_EMAILS.map((e) => e.toLowerCase()),
+              masterPassword: DEFAULT_ADMIN_PASSWORD,
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          ).catch((e) => console.warn('Bootstrap admin doc warning:', e));
+        }
+      },
+      (error) => {
+        console.warn('Admin team snapshot fallback:', error);
       }
     );
 
@@ -356,28 +609,43 @@ export const ContentProvider: React.FC<{ children: React.ReactNode }> = ({ child
   };
 
   const updateClass = async (id: string, updatedFields: Partial<BakingClassInfo>) => {
-    const updated = bakingClasses.map((c) =>
-      c.id === id ? { ...c, ...updatedFields } : c
-    );
+    const existing = bakingClasses.find((c) => c.id === id);
+    const updatedClass: BakingClassInfo = existing
+      ? { ...existing, ...updatedFields }
+      : ({ id, ...updatedFields } as BakingClassInfo);
+
+    const updated = bakingClasses.map((c) => (c.id === id ? updatedClass : c));
     setBakingClasses(updated);
     try {
       localStorage.setItem(STORAGE_KEYS.CLASSES, JSON.stringify(updated));
     } catch {}
 
     try {
-      await setDoc(doc(db, 'baking_classes', id), updatedFields, { merge: true });
+      // Save entire merged class object so deleted date slots stay deleted and all fields remain intact
+      await setDoc(doc(db, 'baking_classes', id), updatedClass);
     } catch (error) {
       console.warn('Could not update class in Firestore:', error);
     }
   };
 
   const deleteClass = async (id: string) => {
+    // 1. Add to deleted IDs set immediately so snapshot listeners never resurrect it
+    const deletedIds = getDeletedClassIds();
+    if (!deletedIds.includes(id)) {
+      deletedIds.push(id);
+      try {
+        localStorage.setItem(STORAGE_KEYS.DELETED_CLASSES, JSON.stringify(deletedIds));
+      } catch {}
+    }
+
+    // 2. Remove from local state and update local storage
     const updated = bakingClasses.filter((c) => c.id !== id);
     setBakingClasses(updated);
     try {
       localStorage.setItem(STORAGE_KEYS.CLASSES, JSON.stringify(updated));
     } catch {}
 
+    // 3. Delete from Firestore collection
     try {
       await deleteDoc(doc(db, 'baking_classes', id));
     } catch (error) {
@@ -385,18 +653,264 @@ export const ContentProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  // Custom Showcase Brownie Management
+  const addCustomBrownie = async (item: Omit<BrownieItem, 'id'>) => {
+    const newId = `custom-${Date.now()}`;
+    const fullItem: BrownieItem = { ...item, id: newId };
+    const updated = [...customBrownies, fullItem];
+    setCustomBrownies(updated);
+    try {
+      localStorage.setItem(STORAGE_KEYS.CUSTOM, JSON.stringify(updated));
+    } catch {}
+    try {
+      await setDoc(doc(db, 'custom_items', newId), fullItem);
+    } catch (e) {
+      console.warn('Could not persist custom item to Firestore:', e);
+    }
+  };
+
+  const updateCustomBrownie = async (id: string, updatedFields: Partial<BrownieItem>) => {
+    const existing = customBrownies.find((b) => b.id === id);
+    const updatedItem: BrownieItem = existing
+      ? { ...existing, ...updatedFields }
+      : ({ id, ...updatedFields } as BrownieItem);
+
+    const updated = customBrownies.map((b) => (b.id === id ? updatedItem : b));
+    setCustomBrownies(updated);
+    try {
+      localStorage.setItem(STORAGE_KEYS.CUSTOM, JSON.stringify(updated));
+    } catch {}
+    try {
+      await setDoc(doc(db, 'custom_items', id), updatedItem);
+    } catch (e) {
+      console.warn('Could not update custom item in Firestore:', e);
+    }
+  };
+
+  const deleteCustomBrownie = async (id: string) => {
+    const updated = customBrownies.filter((b) => b.id !== id);
+    setCustomBrownies(updated);
+    try {
+      localStorage.setItem(STORAGE_KEYS.CUSTOM, JSON.stringify(updated));
+    } catch {}
+    try {
+      await deleteDoc(doc(db, 'custom_items', id));
+    } catch (e) {
+      console.warn('Could not delete custom item in Firestore:', e);
+    }
+  };
+
+  const updateAdminPassword = async (
+    currentPassword: string,
+    newPassword: string
+  ): Promise<{ success: boolean; message: string }> => {
+    if (currentPassword !== adminPassword) {
+      return {
+        success: false,
+        message: 'Current password is incorrect. Please enter your active admin password.',
+      };
+    }
+
+    const trimmedNew = newPassword.trim();
+    if (trimmedNew.length < 6) {
+      return {
+        success: false,
+        message: 'New password must be at least 6 characters long for security.',
+      };
+    }
+
+    setAdminPassword(trimmedNew);
+    try {
+      localStorage.setItem(STORAGE_KEYS.ADMIN_PASSWORD, trimmedNew);
+    } catch {}
+
+    try {
+      await setDoc(
+        doc(db, 'settings', 'admins'),
+        {
+          masterPassword: trimmedNew,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.warn('Firestore save password warning (locally saved):', err);
+    }
+
+    return {
+      success: true,
+      message: 'Admin master password updated! Use your new strong password on next login.',
+    };
+  };
+
+  const verifyAdminCredentials = (
+    email: string,
+    password: string
+  ): { valid: boolean; message: string } => {
+    const cleanEmail = email.trim().toLowerCase();
+    const isAuthorizedEmail =
+      PRIMARY_ADMIN_EMAILS.some((e) => e.toLowerCase() === cleanEmail) ||
+      adminEmails.some((e) => e.toLowerCase() === cleanEmail);
+
+    if (!isAuthorizedEmail) {
+      return {
+        valid: false,
+        message: `Access denied: "${cleanEmail}" is not in the authorized administrators list.`,
+      };
+    }
+
+    const matchedAdmin = adminList.find((a) => a.email.toLowerCase() === cleanEmail);
+    const hasCustomPwd = Boolean(
+      matchedAdmin?.customPassword && matchedAdmin.customPassword.trim().length > 0
+    );
+
+    if (hasCustomPwd && password === matchedAdmin!.customPassword) {
+      return { valid: true, message: 'Authenticated with personal admin password.' };
+    }
+
+    if (password === adminPassword) {
+      return { valid: true, message: 'Authenticated with master admin password.' };
+    }
+
+    return {
+      valid: false,
+      message: 'Incorrect admin password. Please enter the exact password configured by the administrator.',
+    };
+  };
+
+  const addAdminUser = async (newAdmin: {
+    email: string;
+    name: string;
+    role: 'co-admin' | 'manager';
+    addedBy?: string;
+    customPassword?: string;
+  }): Promise<{ success: boolean; message: string }> => {
+    const cleanEmail = newAdmin.email.trim().toLowerCase();
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return { success: false, message: 'Please enter a valid email address.' };
+    }
+
+    if (adminEmails.map((e) => e.toLowerCase()).includes(cleanEmail)) {
+      return {
+        success: false,
+        message: `${cleanEmail} already has administrator access.`,
+      };
+    }
+
+    const newRecord: AdminUserRecord = {
+      email: cleanEmail,
+      name: newAdmin.name.trim() || cleanEmail.split('@')[0],
+      role: newAdmin.role,
+      addedAt: new Date().toISOString(),
+      addedBy: newAdmin.addedBy || user?.email || 'preethipreethu712@gmail.com',
+      isPrimary: false,
+      ...(newAdmin.customPassword?.trim()
+        ? { customPassword: newAdmin.customPassword.trim() }
+        : {}),
+    };
+
+    const updatedList = [...adminList, newRecord];
+    const updatedEmails = Array.from(
+      new Set([
+        ...PRIMARY_ADMIN_EMAILS.map((e) => e.toLowerCase()),
+        ...adminEmails.map((e) => e.toLowerCase()),
+        cleanEmail,
+      ])
+    );
+
+    setAdminList(updatedList);
+    setAdminEmails(updatedEmails);
+
+    try {
+      localStorage.setItem(STORAGE_KEYS.ADMINS, JSON.stringify(updatedList));
+    } catch {}
+
+    try {
+      await setDoc(
+        doc(db, 'settings', 'admins'),
+        {
+          adminList: updatedList,
+          adminEmails: updatedEmails,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.warn('Firestore save admins warning (locally saved):', err);
+    }
+
+    return {
+      success: true,
+      message: `Successfully granted admin access to ${cleanEmail}!`,
+    };
+  };
+
+  const removeAdminUser = async (
+    email: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (PRIMARY_ADMIN_EMAILS.map((e) => e.toLowerCase()).includes(cleanEmail)) {
+      return {
+        success: false,
+        message: `Primary owner email (${cleanEmail}) is protected and cannot be removed.`,
+      };
+    }
+
+    const updatedList = adminList.filter(
+      (a) => a.email.toLowerCase() !== cleanEmail
+    );
+    const updatedEmails = Array.from(
+      new Set([
+        ...PRIMARY_ADMIN_EMAILS.map((e) => e.toLowerCase()),
+        ...updatedList.map((a) => a.email.toLowerCase()),
+      ])
+    );
+
+    setAdminList(updatedList);
+    setAdminEmails(updatedEmails);
+
+    try {
+      localStorage.setItem(STORAGE_KEYS.ADMINS, JSON.stringify(updatedList));
+    } catch {}
+
+    try {
+      await setDoc(
+        doc(db, 'settings', 'admins'),
+        {
+          adminList: updatedList,
+          adminEmails: updatedEmails,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.warn('Firestore update admins warning:', err);
+    }
+
+    return {
+      success: true,
+      message: `Revoked administrator access for ${cleanEmail}.`,
+    };
+  };
+
   // Reset to defaults
   const resetToDefaults = async () => {
+    try {
+      localStorage.removeItem(STORAGE_KEYS.DELETED_CLASSES);
+    } catch {}
+
     setSettings(DEFAULT_SETTINGS);
     setAchievements(DEFAULT_ACHIEVEMENTS);
     setMenuItems(SIGNATURE_BROWNIES);
     setBakingClasses(BAKING_CLASSES);
+    setCustomBrownies(SIGNATURE_BROWNIES);
 
     try {
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
       localStorage.setItem(STORAGE_KEYS.ACHIEVEMENTS, JSON.stringify(DEFAULT_ACHIEVEMENTS));
       localStorage.setItem(STORAGE_KEYS.MENU, JSON.stringify(SIGNATURE_BROWNIES));
       localStorage.setItem(STORAGE_KEYS.CLASSES, JSON.stringify(BAKING_CLASSES));
+      localStorage.setItem(STORAGE_KEYS.CUSTOM, JSON.stringify(SIGNATURE_BROWNIES));
     } catch {}
 
     try {
@@ -404,6 +918,7 @@ export const ContentProvider: React.FC<{ children: React.ReactNode }> = ({ child
       await setDoc(doc(db, 'settings', 'achievements'), DEFAULT_ACHIEVEMENTS);
       for (const item of SIGNATURE_BROWNIES) {
         await setDoc(doc(db, 'menu_items', item.id), item);
+        await setDoc(doc(db, 'custom_items', item.id), item);
       }
       for (const cls of BAKING_CLASSES) {
         await setDoc(doc(db, 'baking_classes', cls.id), cls);
@@ -424,6 +939,10 @@ export const ContentProvider: React.FC<{ children: React.ReactNode }> = ({ child
         achievements,
         menuItems,
         bakingClasses,
+        customBrownies,
+        adminList,
+        adminEmails,
+        adminPassword,
         isAdmin,
         isDemoAdmin,
         toggleDemoAdmin,
@@ -435,6 +954,13 @@ export const ContentProvider: React.FC<{ children: React.ReactNode }> = ({ child
         addClass,
         updateClass,
         deleteClass,
+        addCustomBrownie,
+        updateCustomBrownie,
+        deleteCustomBrownie,
+        updateAdminPassword,
+        verifyAdminCredentials,
+        addAdminUser,
+        removeAdminUser,
         resetToDefaults,
       }}
     >

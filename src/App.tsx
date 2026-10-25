@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { HelmetProvider } from 'react-helmet-async';
 import { AuthProvider } from './context/AuthContext';
 import { ContentProvider } from './context/ContentContext';
+import { SEOHead } from './components/SEOHead';
 import { Navbar } from './components/Navbar';
 import { HeroCarousel } from './components/HeroCarousel';
 import { BrownieGallery } from './components/BrownieGallery';
@@ -11,16 +13,59 @@ import { ContactModal } from './components/ContactModal';
 import { CreationsDrawer } from './components/CreationsDrawer';
 import { MyActivityModal } from './components/MyActivityModal';
 import { AdminApp } from './admin/AdminApp';
+import { CustomOrdersPage } from './components/CustomOrdersPage';
 import { Footer } from './components/Footer';
+import { FloatingWhatsApp } from './components/FloatingWhatsApp';
 import { BrownieItem, SIGNATURE_BROWNIES } from './data/brownies';
 
 function MainBakeryWebsite() {
+  const [currentPage, setCurrentPage] = useState<'home' | 'custom-orders'>(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash.toLowerCase();
+      if (hash === '#custom-orders' || hash.startsWith('#custom-orders') || hash === '#/custom-orders') {
+        return 'custom-orders';
+      }
+    }
+    return 'home';
+  });
+
   const [classModalOpen, setClassModalOpen] = useState(false);
   const [selectedClassId, setSelectedClassId] = useState<string | undefined>(undefined);
   const [contactModalOpen, setContactModalOpen] = useState(false);
   const [creationsDrawerOpen, setCreationsDrawerOpen] = useState(false);
   const [selectedBrownie, setSelectedBrownie] = useState<BrownieItem | null>(null);
   const [myActivityOpen, setMyActivityOpen] = useState(false);
+
+  // Sync hash with custom-orders page
+  useEffect(() => {
+    const handleHashSync = () => {
+      const hash = window.location.hash.toLowerCase();
+      if (hash === '#custom-orders' || hash.startsWith('#custom-orders') || hash === '#/custom-orders') {
+        setCurrentPage('custom-orders');
+      } else if (!hash.includes('admin')) {
+        setCurrentPage('home');
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashSync);
+    window.addEventListener('popstate', handleHashSync);
+    return () => {
+      window.removeEventListener('hashchange', handleHashSync);
+      window.removeEventListener('popstate', handleHashSync);
+    };
+  }, []);
+
+  const handleOpenCustomOrders = () => {
+    window.location.hash = '#custom-orders';
+    setCurrentPage('custom-orders');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleBackToHome = () => {
+    window.location.hash = '';
+    setCurrentPage('home');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   // Handlers for Hero Carousel CTAs
   const handleExploreCreations = () => {
@@ -50,40 +95,55 @@ function MainBakeryWebsite() {
 
   return (
     <div className="min-h-screen bg-[#F8F0E5] text-[#3B211B] flex flex-col relative">
+      {/* Floating WhatsApp Quick Action Button */}
+      <FloatingWhatsApp phoneNumber="7339651529" />
+
       {/* 1. Header & Navigation Bar (Pristine Customer Storefront) */}
       <Navbar
         onOpenCreations={handleExploreCreations}
         onOpenClasses={handleJoinClass}
         onOpenContact={handleGetInTouch}
+        onOpenCustomOrders={handleOpenCustomOrders}
         onOpenMyActivity={() => setMyActivityOpen(true)}
       />
 
       <main className="flex-1">
-        {/* 2. HERO SECTION — FULL-WIDTH HERO BANNER CAROUSEL */}
-        <HeroCarousel
-          onExploreCreations={handleExploreCreations}
-          onJoinClass={handleJoinClass}
-          onGetInTouch={handleGetInTouch}
-          onRegisterInterest={handleRegisterInterest}
-        />
+        {currentPage === 'custom-orders' ? (
+          <CustomOrdersPage
+            onBackToHome={handleBackToHome}
+            onOpenClasses={handleJoinClass}
+          />
+        ) : (
+          <>
+            {/* 2. HERO SECTION — FULL-WIDTH HERO BANNER CAROUSEL */}
+            <HeroCarousel
+              onExploreCreations={handleExploreCreations}
+              onJoinClass={handleJoinClass}
+              onGetInTouch={handleGetInTouch}
+              onRegisterInterest={handleRegisterInterest}
+              onOpenCustomOrders={handleOpenCustomOrders}
+            />
 
-        {/* 3. SEPARATE FIVE-IMAGE BROWNIE GALLERY COMPONENT WITH 3D DEPTH CONTROLS */}
-        <BrownieGallery
-          onSelectBrownie={handleSelectBrownie}
-          onViewAllCreations={handleExploreCreations}
-        />
+            {/* 3. MENU SECTION — INFINITE SLIDER WITH PROGRESSIVE BLUR */}
+            <BrownieGallery
+              onSelectBrownie={handleSelectBrownie}
+              onViewAllCreations={handleExploreCreations}
+              onOpenCustomOrders={handleOpenCustomOrders}
+            />
 
-        {/* 4. ACHIEVEMENTS & MILESTONES SECTION */}
-        <AchievementSection
-          onOpenContact={handleGetInTouch}
-          onOpenClasses={handleJoinClass}
-        />
+            {/* 4. ACHIEVEMENTS & MILESTONES SECTION */}
+            <AchievementSection
+              onOpenContact={handleGetInTouch}
+              onOpenClasses={handleJoinClass}
+            />
 
-        {/* 5. THE BAKER BEHIND THE BRAND & BAKING STUDIO */}
-        <AboutSection
-          onJoinClass={handleJoinClass}
-          onExploreCreations={handleExploreCreations}
-        />
+            {/* 5. THE BAKER BEHIND THE BRAND & BAKING STUDIO */}
+            <AboutSection
+              onJoinClass={handleJoinClass}
+              onExploreCreations={handleExploreCreations}
+            />
+          </>
+        )}
       </main>
 
       {/* 6. Footer (Pristine Customer Storefront) */}
@@ -91,6 +151,8 @@ function MainBakeryWebsite() {
         onOpenCreations={handleExploreCreations}
         onOpenClasses={handleJoinClass}
         onOpenContact={handleGetInTouch}
+        onOpenCustomOrders={handleOpenCustomOrders}
+        onOpenMyActivity={() => setMyActivityOpen(true)}
       />
 
       {/* Interactive Modals & Drawers */}
@@ -110,7 +172,8 @@ function MainBakeryWebsite() {
         onClose={() => setCreationsDrawerOpen(false)}
         selectedBrownie={selectedBrownie}
         onSelectBrownie={(b) => setSelectedBrownie(b)}
-        onOrderNow={() => setContactModalOpen(true)}
+        onOrderNow={handleOpenCustomOrders}
+        onOpenCustomOrders={handleOpenCustomOrders}
       />
 
       <MyActivityModal
@@ -176,19 +239,26 @@ function RootApp() {
     setIsAdminRoute(false);
   };
 
-  if (isAdminRoute) {
-    return <AdminApp onBackToWebsite={navigateToWebsite} />;
-  }
-
-  return <MainBakeryWebsite />;
+  return (
+    <>
+      <SEOHead isAdmin={isAdminRoute} />
+      {isAdminRoute ? (
+        <AdminApp onBackToWebsite={navigateToWebsite} />
+      ) : (
+        <MainBakeryWebsite />
+      )}
+    </>
+  );
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <ContentProvider>
-        <RootApp />
-      </ContentProvider>
-    </AuthProvider>
+    <HelmetProvider>
+      <AuthProvider>
+        <ContentProvider>
+          <RootApp />
+        </ContentProvider>
+      </AuthProvider>
+    </HelmetProvider>
   );
 }

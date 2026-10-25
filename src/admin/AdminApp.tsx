@@ -16,12 +16,14 @@ export const AdminApp: React.FC<AdminAppProps> = ({ onBackToWebsite }) => {
   });
 
   const [adminUser, setAdminUser] = useState<string>(() => {
-    if (typeof window === 'undefined') return 'admin@browinegirlcakes.com';
-    return (
+    if (typeof window === 'undefined') return 'preethipreethu712@gmail.com';
+    const stored =
       localStorage.getItem('browinegirl_admin_user') ||
-      sessionStorage.getItem('browinegirl_admin_user') ||
-      'admin@browinegirlcakes.com'
-    );
+      sessionStorage.getItem('browinegirl_admin_user');
+    if (!stored || stored === 'admin@browinegirlcakes.com') {
+      return 'preethipreethu712@gmail.com';
+    }
+    return stored;
   });
 
   const handleLoginSuccess = (email: string) => {
